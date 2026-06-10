@@ -248,13 +248,17 @@ services:
   # ============================================================================
 
   tigerbeetle:
-    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.6
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.9
     container_name: farmer-tigerbeetle
     ports:
       - "3000:3000"
     command: start --addresses=0.0.0.0:3000 /data/0_0.tigerbeetle
     volumes:
       - tigerbeetle-data:/data
+    cap_add:
+      - IPC_LOCK
+    networks:
+      - farmconnect-network
     healthcheck:
       test: ["CMD-SHELL", "echo 'tigerbeetle health check' && nc -z localhost 3000 || exit 1"]
       interval: 10s

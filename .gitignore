@@ -112,3 +112,8 @@ services/rust/*/target/
 test-plan*.md
 test-report.md
 test-screenshots/
+myapp-amd64.tar
+newwaveclaw@america
+*.tar
+*.tar.gz
+
