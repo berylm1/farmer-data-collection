@@ -52,8 +52,8 @@ async function loadSqliteWasm(): Promise<SqliteModule> {
     const initSqlJs = (await import('sql.js')).default;
     
     const SQL = await initSqlJs({
-      locateFile: (file: string) => `https://sql.js.org/dist/${file}`,
-    });
+    locateFile: () => `/sql-wasm.wasm`,
+  });
     
     sqliteModule = SQL as unknown as SqliteModule;
     return sqliteModule;
@@ -203,13 +203,21 @@ export class SqliteWasmDb implements LocalDb {
     }
     
     // Create database instance
-    if (existingData) {
-      console.warn('[SQLite WASM] Loading existing database from storage');
-      this.db = new SQL.Database(existingData as any);
-    } else {
-      console.warn('[SQLite WASM] Creating new database');
-      this.db = new SQL.Database(':memory:' as any);
-    }
+      if (existingData) {
+        // Restore from saved data — but validate it first
+        try {
+          this.db = new SQL.Database(existingData);
+          // Quick validation: run a simple query to check it's a real database
+          this.db.exec("SELECT 1");
+        } catch (validationError) {
+          console.warn('[SQLite WASM] Saved database is corrupted, creating fresh database:', validationError);
+          this.db = new SQL.Database(':memory:' as any);
+          existingData = null; // Mark as new so we don't try to save corrupted data back
+        }
+      } else {
+        // Create new database
+        this.db = new SQL.Database(':memory:' as any);
+      }
     
     // Enable WAL mode for better crash recovery (if supported)
     try {

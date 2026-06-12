@@ -70,7 +70,7 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
   useEffect(() => {
     if (!isAuthenticated || !user) return;
 
-    const wsUrl = import.meta.env.VITE_WEBSOCKET_URL || "ws://localhost:8081";
+    const wsUrl = import.meta.env.VITE_WEBSOCKET_URL || `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`;
 
     const manager = new ResilientConnectionManager({
       wsUrl,
@@ -108,8 +108,8 @@ export function WebSocketProvider({ children }: WebSocketProviderProps) {
     manager.onMessage("system_notification", (data) =>
       handleSystemNotification(data as Record<string, unknown>));
 
-    // Also maintain raw WebSocket for backward compatibility
-    connectRawWebSocket(wsUrl, clientId);
+    // Raw /ws fallback disabled for production demo; Socket.IO/resilient manager remains active.
+    // connectRawWebSocket(wsUrl, clientId);
 
     return () => {
       unsub();

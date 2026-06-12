@@ -1,0 +1,489 @@
+# docker-compose.polyglot.yml - Polyglot microservices for FarmConnect
+# Deploy with: docker compose -f docker-compose.yml -f docker-compose.polyglot.yml up -d
+
+services:
+  # === ROOT GO SERVICES ===
+  feature-flags:
+    image: farmconnect/feature-flags:latest
+    container_name: farmer-feature-flags
+    restart: unless-stopped
+    ports:
+      - "8101:8101"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  whatsapp-service:
+    image: farmconnect/whatsapp-service:latest
+    container_name: farmer-whatsapp-service
+    restart: unless-stopped
+    ports:
+      - "8102:8102"
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      META_WHATSAPP_ACCESS_TOKEN: ${META_WHATSAPP_ACCESS_TOKEN}
+      META_WHATSAPP_PHONE_NUMBER_ID: ${META_WHATSAPP_PHONE_NUMBER_ID}
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  qr-traceability:
+    image: farmconnect/qr-traceability:latest
+    container_name: farmer-qr-traceability
+    restart: unless-stopped
+    ports:
+      - "8103:8103"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  # === GO SERVICES (services/go/) ===
+  blockchain-provenance:
+    image: farmconnect/blockchain-provenance:latest
+    container_name: farmer-blockchain-provenance
+    restart: unless-stopped
+    ports:
+      - "8110:8110"
+    networks:
+      - farmconnect-network
+
+  aquaculture-pond:
+    image: farmconnect/aquaculture-pond:latest
+    container_name: farmer-aquaculture-pond
+    restart: unless-stopped
+    ports:
+      - "8113:8113"
+    networks:
+      - farmconnect-network
+
+  image-service:
+    image: farmconnect/image-service:latest
+    container_name: farmer-image-service
+    restart: unless-stopped
+    ports:
+      - "8114:8114"
+    networks:
+      - farmconnect-network
+
+  equipment-fleet-service:
+    image: farmconnect/equipment-fleet-service:latest
+    container_name: farmer-equipment-fleet
+    restart: unless-stopped
+    ports:
+      - "8098:8098"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  # === RUST SERVICES (services/rust/) ===
+  urban-delivery:
+    image: farmconnect/urban-delivery:latest
+    container_name: farmer-urban-delivery
+    restart: unless-stopped
+    ports:
+      - "8111:8111"
+    networks:
+      - farmconnect-network
+
+  aquaculture-feed:
+    image: farmconnect/aquaculture-feed:latest
+    container_name: farmer-aquaculture-feed
+    restart: unless-stopped
+    ports:
+      - "8114:8114"
+    networks:
+      - farmconnect-network
+
+  autonomous-ops:
+    image: farmconnect/autonomous-ops:latest
+    container_name: farmer-autonomous-ops
+    restart: unless-stopped
+    ports:
+      - "8119:8115"
+    networks:
+      - farmconnect-network
+
+  iot-gateway:
+    image: farmconnect/iot-gateway:latest
+    container_name: farmer-iot-gateway
+    restart: unless-stopped
+    ports:
+      - "8116:8116"
+    environment:
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  isobus-gateway:
+    image: farmconnect/isobus-gateway:latest
+    container_name: farmer-isobus-gateway
+    restart: unless-stopped
+    ports:
+      - "8117:8117"
+    networks:
+      - farmconnect-network
+
+  # === PYTHON SERVICES (services/ root) ===
+  geocoding:
+    image: farmconnect/geocoding:latest
+    container_name: farmer-geocoding
+    restart: unless-stopped
+    ports:
+      - "8100:8100"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  weather-alerts:
+    image: farmconnect/weather-alerts:latest
+    container_name: farmer-weather-alerts
+    restart: unless-stopped
+    ports:
+      - "8107:8107"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY}
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  credit-scoring:
+    image: farmconnect/credit-scoring:latest
+    container_name: farmer-credit-scoring
+    restart: unless-stopped
+    ports:
+      - "8108:8108"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: farmer_data
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  voice-navigation:
+    image: farmconnect/voice-navigation:latest
+    container_name: farmer-voice-navigation
+    restart: unless-stopped
+    ports:
+      - "8109:8109"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  # === PYTHON SERVICES (services/python/) ===
+  ml-service:
+    image: farmconnect/ml-service:latest
+    container_name: farmer-ml-service
+    restart: unless-stopped
+    ports:
+      - "8001:8001"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  aquaculture-ai:
+    image: farmconnect/aquaculture-ai:latest
+    container_name: farmer-aquaculture-ai
+    restart: unless-stopped
+    ports:
+      - "8119:8115"
+    networks:
+      - farmconnect-network
+
+  conversational-commerce:
+    image: farmconnect/conversational-commerce:latest
+    container_name: farmer-conversational-commerce
+    restart: unless-stopped
+    ports:
+      - "8118:8118"
+    networks:
+      - farmconnect-network
+
+  price-prediction-service:
+    image: farmconnect/price-prediction-service:latest
+    container_name: farmer-price-prediction
+    restart: unless-stopped
+    ports:
+      - "8093:8093"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  ollama-service:
+    image: farmconnect/ollama-service:latest
+    container_name: farmer-ollama-service
+    restart: unless-stopped
+    ports:
+      - "8087:8087"
+    networks:
+      - farmconnect-network
+
+  lakehouse-service:
+    image: farmconnect/lakehouse-service:latest
+    container_name: farmer-lakehouse-service
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: farmer_data
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  weather-service:
+    image: farmconnect/weather-service:latest
+    container_name: farmer-weather-service
+    restart: unless-stopped
+    ports:
+      - "8069:8069"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  federated-learning:
+    image: farmconnect/federated-learning:latest
+    container_name: farmer-federated-learning
+    restart: unless-stopped
+    ports:
+      - "8088:8088"
+    networks:
+      - farmconnect-network
+
+  satellite-service:
+    image: farmconnect/satellite-service:latest
+    container_name: farmer-satellite-service
+    restart: unless-stopped
+    ports:
+      - "8091:8091"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  kyc-verification:
+    image: farmconnect/kyc-verification:latest
+    container_name: farmer-kyc-verification
+    restart: unless-stopped
+    ports:
+      - "8092:8092"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  loan-worker:
+    image: farmconnect/loan-worker:latest
+    container_name: farmer-loan-worker
+    restart: unless-stopped
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      temporal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  temporal-workflows:
+    image: farmconnect/temporal-workflows:latest
+    container_name: farmer-temporal-workflows
+    restart: unless-stopped
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      temporal:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  messaging-analytics:
+    image: farmconnect/messaging-analytics:latest
+    container_name: farmer-messaging-analytics
+    restart: unless-stopped
+    ports:
+      - "8094:8094"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  sync-analytics:
+    image: farmconnect/sync-analytics:latest
+    container_name: farmer-sync-analytics
+    restart: unless-stopped
+    ports:
+      - "8095:8095"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  cold-chain-service:
+    image: farmconnect/cold-chain-service:latest
+    container_name: farmer-cold-chain-service
+    restart: unless-stopped
+    ports:
+      - "8096:8096"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+  indoor-farming-ai:
+    image: farmconnect/indoor-farming-ai:latest
+    container_name: farmer-indoor-farming-ai
+    restart: unless-stopped
+    ports:
+      - "8097:8097"
+    networks:
+      - farmconnect-network
+
+  agri-llm:
+    image: farmconnect/agri-llm:latest
+    container_name: farmer-agri-llm
+    restart: unless-stopped
+    ports:
+      - "8098:8098"
+    networks:
+      - farmconnect-network
+
+  sedona-supply-chain:
+    image: farmconnect/sedona-supply-chain:latest
+    container_name: farmer-sedona-supply-chain
+    restart: unless-stopped
+    ports:
+      - "8099:8099"
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - farmconnect-network
+
+networks:
+  farmconnect-network:
+    external: true

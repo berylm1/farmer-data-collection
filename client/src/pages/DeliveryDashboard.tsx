@@ -10,7 +10,7 @@ import { Truck, MapPin, Thermometer, Package, Users, Route, Star, Clock, Navigat
 import { MapView, maplibregl } from "@/components/Map";
 import { useLocalization } from "@/contexts/LocalizationContext";
 
-const GPS_STREAMING_WS_URL = import.meta.env.VITE_GPS_STREAMING_WS_URL || 'ws://localhost:8098';
+const GPS_STREAMING_WS_URL = import.meta.env.VITE_GPS_STREAMING_WS_URL || `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
 
 interface DriverPosition {
   driver_id: number;

@@ -1,37 +1,17 @@
-FROM golang:1.21-alpine AS builder
-
+FROM golang:1.23-alpine AS builder
 WORKDIR /app
 
-# Install dependencies
-RUN apk add --no-cache git
+COPY shared ./shared
+COPY loan-orchestrator/go.mod loan-orchestrator/go.sum* ./loan-orchestrator/
 
-# Copy go mod files
-COPY go.mod go.sum* ./
-RUN go mod download 2>/dev/null || go mod init loan-orchestrator
+WORKDIR /app/loan-orchestrator
+RUN go mod download
 
-# Copy source code
-COPY . .
+COPY loan-orchestrator/ .
+RUN CGO_ENABLED=0 GOOS=linux go build -o /service .
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -o /loan-orchestrator main.go
-
-# Final stage
 FROM alpine:3.19
-
-WORKDIR /app
-
-# Install ca-certificates for HTTPS
 RUN apk --no-cache add ca-certificates curl
-
-# Copy binary from builder
-COPY --from=builder /loan-orchestrator /app/loan-orchestrator
-
-# Expose port
-EXPOSE 8010
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
-  CMD curl -f http://localhost:8010/health || exit 1
-
-# Run the application
-CMD ["/app/loan-orchestrator"]
+COPY --from=builder /service /service
+EXPOSE 8080
+CMD ["/service"]

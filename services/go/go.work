@@ -1,0 +1,25 @@
+go 1.23
+
+use (
+	./apisix-gateway
+	./aquaculture-pond
+	./blockchain-provenance
+	./contract-farming
+	./dapr-service
+	./delivery-service
+	./drone-service
+	./equipment-fleet-service
+	./fluvio-streaming
+	./gps-streaming
+	./image-service
+	./loan-orchestrator
+	./messaging-middleware
+	./mobile-money-service
+	./orchestrator-coordinator
+	./realtime-service
+	./shared
+	./supply-chain-service
+./sync-orchestrator
+	./tigerbeetle-service
+	./tile-cache-service
+)

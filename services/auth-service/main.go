@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"time"
@@ -249,7 +248,7 @@ func (s *Service) handleRegister(c *gin.Context) {
 
 	// Create user in Keycloak
 	ctx := context.Background()
-	token, err := s.keycloak.LoginAdmin(ctx, "admin", "admin", "master")
+	adminToken, err := s.keycloak.LoginAdmin(ctx, "admin", "admin", "master")
 	if err != nil {
 		s.logger.Warn("Failed to login to Keycloak", zap.Error(err))
 	} else {
@@ -261,12 +260,12 @@ func (s *Service) handleRegister(c *gin.Context) {
 			EmailVerified: gocloak.BoolP(true),
 		}
 		
-		keycloakUserID, err := s.keycloak.CreateUser(ctx, token.AccessToken, s.config.KeycloakRealm, user)
+		keycloakUserID, err := s.keycloak.CreateUser(ctx, adminToken.AccessToken, s.config.KeycloakRealm, user)
 		if err != nil {
 			s.logger.Warn("Failed to create user in Keycloak", zap.Error(err))
 		} else {
 			// Set password
-			err = s.keycloak.SetPassword(ctx, token.AccessToken, keycloakUserID, s.config.KeycloakRealm, req.Password, false)
+			err = s.keycloak.SetPassword(ctx, adminToken.AccessToken, keycloakUserID, s.config.KeycloakRealm, req.Password, false)
 			if err != nil {
 				s.logger.Warn("Failed to set password in Keycloak", zap.Error(err))
 			}
@@ -344,9 +343,9 @@ func (s *Service) handleLogin(c *gin.Context) {
 		})
 
 		c.JSON(http.StatusOK, LoginResponse{
-			AccessToken:  *keycloakToken.AccessToken,
-			RefreshToken: *keycloakToken.RefreshToken,
-			ExpiresIn:    int(*keycloakToken.ExpiresIn),
+			AccessToken:  keycloakToken.AccessToken,
+			RefreshToken: keycloakToken.RefreshToken,
+			ExpiresIn:    int(keycloakToken.ExpiresIn),
 			User:         user,
 		})
 		return

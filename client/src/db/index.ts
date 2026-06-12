@@ -6,16 +6,33 @@ type DrizzleDatabase = any;
 let dbInstance: DrizzleDatabase | null = null;
 let clientInstance: LocalDb | null = null;
 let initPromise: Promise<void> | null = null;
+let initFailed: boolean = false;
 
 async function initializeDatabase() {
-  if (!initPromise) {
-    initPromise = (async () => {
-      // Use SQLite WASM database via dbFactory
-      clientInstance = await getDatabase();
+  // If init previously failed, allow retry
+  if (initFailed) {
+    initPromise = null;
+    initFailed = false;
+  }
 
-      // The LocalDb instance serves as both client and db
-      dbInstance = clientInstance;
+  if (!initPromise) {
+    console.log("[db/index] Creating new initPromise...");
+    initPromise = (async () => {
+      console.log("[db/index] Calling getDatabase()...");
+      try {
+        clientInstance = await getDatabase();
+        console.log("[db/index] getDatabase() returned successfully");
+        dbInstance = clientInstance;
+      } catch (err) {
+        console.error("[db/index] getDatabase() FAILED:", err);
+        initFailed = true;
+        dbInstance = null;
+        clientInstance = null;
+        throw err;
+      }
     })();
+  } else {
+    console.log("[db/index] Reusing existing initPromise");
   }
 
   return initPromise;
@@ -23,6 +40,7 @@ async function initializeDatabase() {
 
 // Export a function to get the database instance
 export async function getDb() {
+  console.log("[db/index] getDb() called");
   await initializeDatabase();
   if (!dbInstance) {
     throw new Error('Database not initialized');

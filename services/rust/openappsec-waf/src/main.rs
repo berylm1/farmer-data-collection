@@ -81,7 +81,7 @@ impl AppState {
             ],
             xss_patterns: vec![
                 Regex::new(r"(?i)<script\b[^<]*(?:(?!</script>)<[^<]*)*</script>").unwrap(),
-                Regex::new(r"(?i)on\w+\s*=\s*[\"']?[^\"']*[\"']?").unwrap(),
+                Regex::new(r#"(?i)on\w+\s*=\s*["']?[^"']*["']?"#).unwrap(),
                 Regex::new(r"(?i)javascript\s*:").unwrap(),
                 Regex::new(r"(?i)<\s*(img|iframe|object|embed|svg)\b[^>]*\bon\w+").unwrap(),
             ],

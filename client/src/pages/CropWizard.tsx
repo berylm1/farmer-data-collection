@@ -49,7 +49,7 @@ export default function CropWizard() {
         <div className="flex justify-center">
           <Button
             size="lg"
-            onClick={() => setLocation(`/crops/${selectedCrop}`)}
+            onClick={() => setLocation(`/crops/dashboard?crop=${selectedCrop}`)}
           >
             Continue with {CROPS.find(c => c.id === selectedCrop)?.name}
           </Button>

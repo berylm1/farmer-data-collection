@@ -222,45 +222,73 @@ export default function QuickFarmerRegistration() {
   const prevStep = () => {
     setStep(prev => Math.max(prev - 1, 1));
   };
+const submitFarmerData = async (data: FormData, isSync = false) => {
+  if (!isInitialized || !db || !user) {
+    throw new Error(
+      `Local registration unavailable: initialized=${isInitialized}, db=${!!db}, user=${!!user}`
+    );
+  }
 
-  const submitFarmerData = async (data: FormData, isSync = false) => {
-    if (!isInitialized || !db || !user) {
-      throw new Error("Database not initialized");
+  const clientId = isSync ? null : `offline-${Date.now()}`;
+
+  return await db.transaction(async () => {
+    await db.run(
+      `
+      INSERT INTO farmers (
+        user_id, first_name, last_name, phone_number, email, address,
+        village, district, region, national_id, photo_url, client_id, sync_status
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        user.id,
+        data.firstName,
+        data.lastName,
+        data.phoneNumber || null,
+        data.email || null,
+        data.address || null,
+        data.village,
+        data.district,
+        data.region,
+        data.nationalId || null,
+        data.photoUrl || null,
+        clientId,
+        isSync ? "synced" : "pending",
+      ]
+    );
+
+    const farmer = await db.get<{ id: number }>(
+      `SELECT id FROM farmers WHERE rowid = last_insert_rowid()`
+    );
+
+    if (!farmer?.id) {
+      throw new Error("Farmer insert succeeded but no ID was returned");
     }
 
-    // Insert farmer
-    const farmerResult = await db.insert(farmers).values({
-      userId: user.id,
-      firstName: data.firstName,
-      lastName: data.lastName,
-      phoneNumber: data.phoneNumber,
-      email: data.email || null,
-      address: data.address || null,
-      village: data.village,
-      district: data.district,
-      region: data.region,
-      nationalId: data.nationalId || null,
-      photoUrl: data.photoUrl || null,
-      clientId: isSync ? undefined : `offline-${Date.now()}`,
-    }).returning();
-
-    const farmer = farmerResult[0];
-
-    // Insert farm
-    await db.insert(farms).values({
-      userId: user.id,
-      farmerId: farmer.id,
-      farmName: data.farmName,
-      farmSize: data.farmSize || null,
-      farmSizeUnit: "acres",
-      latitude: data.latitude?.toString() || null,
-      longitude: data.longitude?.toString() || null,
-      location: `${data.latitude}, ${data.longitude}`,
-      clientId: isSync ? undefined : `offline-${Date.now()}`,
-    });
+    await db.run(
+      `
+      INSERT INTO farms (
+        user_id, farmer_id, farm_name, farm_size, farm_size_unit,
+        latitude, longitude, location, client_id, sync_status
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        user.id,
+        farmer.id,
+        data.farmName,
+        data.farmSize ? Number(data.farmSize) : null,
+        data.latitude,
+        data.longitude,
+        `${data.latitude}, ${data.longitude}`,
+        clientId,
+        isSync ? "synced" : "pending",
+      ]
+    );
 
     return farmer;
-  };
+  });
+};
 
   const handleSubmit = async () => {
     if (!validateStep(3)) return;
@@ -276,8 +304,7 @@ export default function QuickFarmerRegistration() {
         toast.success("Saved offline. Will sync when online.");
         resetForm();
         return;
-      }
-
+    }
       await submitFarmerData(formData);
       toast.success("Farmer registered successfully!");
       setStep(4);

@@ -107,19 +107,26 @@ export const protectedProcedure = baseProcedure
   if (ctx.token && !ctx.keycloakUser) {
     try {
       const decoded = jwt.verify(ctx.token, JWT_SECRET) as { userId: number; email: string; role: string };
-      const db = await getDb();
-      if (db) {
-        const user = await db.select().from(users).where(eq(users.id, decoded.userId)).limit(1);
-        if (user.length > 0) {
-          return next({
-            ctx: {
-              ...ctx,
-              user: user[0],
-            } as AuthenticatedContext,
-          });
+
+      // Try DB lookup in its own try/catch so DB errors don't skip demo fallback
+      try {
+        const db = await getDb();
+        if (db) {
+          const user = await db.select().from(users).where(eq(users.id, decoded.userId)).limit(1);
+          if (user.length > 0) {
+            return next({
+              ctx: {
+                ...ctx,
+                user: user[0],
+              } as AuthenticatedContext,
+            });
+          }
         }
+      } catch (dbError) {
+        logger.warn('[Auth] DB lookup failed, falling back to demo user:', dbError instanceof Error ? dbError.message : String(dbError));
       }
 
+      // Demo user fallback - always reached even if DB is down
       const demoUser = getDemoUserFromToken(decoded);
       if (demoUser) {
         return next({
@@ -136,17 +143,21 @@ export const protectedProcedure = baseProcedure
 
   // Check Keycloak user
   if (ctx.keycloakUser) {
-    const db = await getDb();
-    if (db) {
-      const user = await db.select().from(users).where(eq(users.email, ctx.keycloakUser.email)).limit(1);
-      if (user.length > 0) {
-        return next({
-          ctx: {
-            ...ctx,
-            user: user[0],
-          } as AuthenticatedContext,
-        });
+    try {
+      const db = await getDb();
+      if (db) {
+        const user = await db.select().from(users).where(eq(users.email, ctx.keycloakUser.email)).limit(1);
+        if (user.length > 0) {
+          return next({
+            ctx: {
+              ...ctx,
+              user: user[0],
+            } as AuthenticatedContext,
+          });
+        }
       }
+    } catch (dbError) {
+      logger.warn('[Auth] Keycloak user DB lookup failed:', dbError instanceof Error ? dbError.message : String(dbError));
     }
   }
 

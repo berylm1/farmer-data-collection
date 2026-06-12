@@ -4,9 +4,7 @@ FROM python:3.11-slim AS builder
 WORKDIR /app
 
 # Install build dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends     gcc     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements
 COPY requirements.txt .
@@ -20,9 +18,7 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Install runtime dependencies
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    wget \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends     wget     && rm -rf /var/lib/apt/lists/*
 
 # Copy Python dependencies from builder
 COPY --from=builder /root/.local /root/.local
@@ -31,14 +27,13 @@ COPY --from=builder /root/.local /root/.local
 COPY . .
 
 # Make sure scripts in .local are usable
-ENV PATH=/root/.local/bin:$PATH
+ENV PATH=/root/.local/bin:/home/beryl/.local/bin:/home/beryl/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games
 
 # Expose port
 EXPOSE 8085
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://localhost:8085/health || exit 1
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3   CMD wget --quiet --tries=1 --spider http://localhost:8085/health || exit 1
 
-# Run the application
-CMD ["python", "app.py"]
+# Run the application (main.py is in app/ subdirectory)
+CMD ["python", "app/main.py"]

@@ -1,0 +1,3 @@
+FROM apache/apisix:3.7.0-debian
+COPY apisix/config.yaml /usr/local/apisix/conf/config.yaml
+COPY apisix/apisix.yaml /usr/local/apisix/conf/apisix.yaml

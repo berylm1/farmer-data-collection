@@ -4,12 +4,10 @@ import fs from "node:fs";
 import path from "path";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
-import { vitePluginManusRuntime } from "vite-plugin-manus-runtime";
 
 const plugins = [
   react(), 
   tailwindcss(), 
-  vitePluginManusRuntime(),
   VitePWA({
     registerType: 'autoUpdate',
     includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],

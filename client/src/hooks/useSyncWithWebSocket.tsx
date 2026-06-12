@@ -62,7 +62,7 @@ const SYNC_ON_FOCUS_DELAY = 1000; // 1 second delay after focus
 const SYNC_ON_RECONNECT_DELAY = 500; // 500ms delay after reconnect
 const SYNC_DEBOUNCE_MS = 2000; // Debounce rapid sync triggers
 const GO_SYNC_SERVICE_URL = import.meta.env.VITE_GO_SYNC_SERVICE_URL || 'http://localhost:8090';
-const PYTHON_ANALYTICS_URL = import.meta.env.VITE_PYTHON_ANALYTICS_URL || 'http://localhost:8091';
+const PYTHON_ANALYTICS_URL = import.meta.env.VITE_PYTHON_ANALYTICS_URL || '';
 
 // ============================================================================
 // Enhanced Sync Hook
@@ -373,7 +373,7 @@ export function useSyncWithWebSocket() {
   // ============================================================================
 
   const reportSyncMetrics = async (results: TableSyncResult[], durationMs: number) => {
-    if (!user) return;
+    if (!user || !PYTHON_ANALYTICS_URL) return;
 
     try {
       const metrics = {
@@ -390,7 +390,7 @@ export function useSyncWithWebSocket() {
         success: results.every(r => r.success),
       };
 
-      await fetch(`${PYTHON_ANALYTICS_URL}/api/metrics`, {
+      await fetch(`${PYTHON_ANALYTICS_URL}/metrics`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(metrics),

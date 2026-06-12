@@ -1,0 +1,2216 @@
+# FarmConnect Platform — Complete Production Stack
+# Generated from guide + actual source inventory (64+ services)
+# Deploy: docker compose -f docker-compose.clean.yml up -d
+# Layer-by-layer: see guide Section 8
+
+services:
+  # ============================================================
+  # LAYER 1: DATA STORES (no deps)
+  # ============================================================
+  postgres:
+    image: postgis/postgis:16-3.4-alpine
+    container_name: farmer-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: farmer_data
+      POSTGRES_USER: ${DB_USER:-farmer_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./drizzle/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 5432 -U ${DB_USER:-farmer_user}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+        reservations:
+          memory: 512M
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  pgbouncer:
+    image: bitnamilegacy/pgbouncer:1.22.0
+    container_name: farmer-pgbouncer
+    restart: unless-stopped
+    ports:
+      - "6432:6432"
+    environment:
+      PGBOUNCER_DATABASE: farmer_data
+      PGBOUNCER_PORT: "6432"
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: "200"
+      PGBOUNCER_DEFAULT_POOL_SIZE: "25"
+      PGBOUNCER_MIN_POOL_SIZE: "5"
+      PGBOUNCER_IGNORE_STARTUP_PARAMETERS: "statement_timeout"
+      POSTGRESQL_HOST: postgres
+      POSTGRESQL_PORT: "5432"
+      POSTGRESQL_USERNAME: ${DB_USER:-farmer_user}
+      POSTGRESQL_PASSWORD: ${DB_PASSWORD}
+      POSTGRESQL_DATABASE: farmer_data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "PGPASSWORD=$$POSTGRESQL_PASSWORD psql -h localhost -p 6432 -U $$POSTGRESQL_USERNAME -d farmer_data -tAc \"SELECT 1\" | grep -q 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  redis:
+    image: redis:7-alpine
+    container_name: farmer-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD}
+      --save 60 1000
+      --save 300 100
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+          cpus: "1.0"
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: farmer-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_NUM_PARTITIONS: 4
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  # ============================================================
+  # LAYER 2: AUTH & ACCESS CONTROL (needs PG)
+  # ============================================================
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: farmer-keycloak
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    command: ["start-dev"]
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN_USERNAME:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KEYCLOAK_HOSTNAME: localhost
+      KC_HTTP_ENABLED: "true"
+      JAVA_OPTS: "-Xms512m -Xmx1g -XX:MaxRAMPercentage=75"
+      PERMIFY_LOG_LEVEL: info
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+        reservations:
+          memory: 1G
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 bash -c '</dev/tcp/127.0.0.1/8080' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  permify:
+    image: ghcr.io/permify/permify:latest
+    container_name: farmer-permify
+    restart: unless-stopped
+    ports:
+      - "3476:3476"
+      - "3478:3478"
+    command: serve
+    environment:
+      PERMIFY_DATABASE_ENGINE: postgres
+      PERMIFY_DATABASE_URI: "postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/permify?sslmode=disable"
+      PERMIFY_LOG_LEVEL: info
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3476/healthz | grep -q SERVING"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "0.5"
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  temporal:
+    image: temporalio/auto-setup:1.23.1
+    container_name: farmer-temporal
+    restart: unless-stopped
+    ports:
+      - "7233:7233"
+    environment:
+      DB: postgresql
+      DB_PORT: 5432
+      POSTGRES_USER: ${DB_USER:-farmer_user}
+      POSTGRES_PWD: ${DB_PASSWORD}
+      POSTGRES_SEEDS: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "tctl --address temporal:7233 cluster health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  temporal-ui:
+    image: temporalio/ui:2.26.2
+    container_name: farmer-temporal-ui
+    restart: unless-stopped
+    ports:
+      - "8233:8080"
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:8080 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  # ============================================================
+  # LAYER 3: SEARCH & API GATEWAY (standalone)
+  # ============================================================
+  opensearch:
+    image: opensearchproject/opensearch:2.12.0
+    container_name: farmer-opensearch
+    restart: unless-stopped
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_INITIAL_ADMIN_PASSWORD: ${OPENSEARCH_PASSWORD}
+      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"
+      plugins.security.disabled: "false"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "2.0"
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.12.0
+    container_name: farmer-opensearch-dashboards
+    restart: unless-stopped
+    ports:
+      - "5601:5601"
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:5601/api/status || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  apisix:
+    image: apache/apisix:3.7.0-debian
+    container_name: farmer-apisix
+    restart: unless-stopped
+    ports:
+      - "9080:9080"
+      - "9180:9180"
+    volumes:
+      - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+    environment:
+      APISIX_STAND_ALONE: "true"
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9080/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  openappsec:
+    image: ghcr.io/openappsec/smartsync:latest
+    container_name: farmer-openappsec
+    restart: unless-stopped
+    ports:
+      - "8085:8080"
+    environment:
+      LEARNING_MODE: "false"
+      LOG_LEVEL: info
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  # ============================================================
+  # LAYER 4: FINANCIAL & WORKFLOW (standalone)
+  # ============================================================
+  tigerbeetle:
+    image: ghcr.io/tigerbeetle/tigerbeetle:0.16.9
+    container_name: farmer-tigerbeetle
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    command: start --addresses=0.0.0.0:3000 /data/0_0.tigerbeetle
+    volumes:
+      - tigerbeetle-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 3000 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    security_opt:
+      - seccomp=unconfined
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  fluvio:
+    image: infinyon/fluvio:latest
+    container_name: farmer-fluvio
+    restart: unless-stopped
+    ports:
+      - "9003:9003"
+    environment:
+      FLUVIO_NODE_BIND_ADDR: 0.0.0.0:9003
+    volumes:
+      - fluvio-data:/var/lib/fluvio
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9003/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "1.0"
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  dapr-placement:
+    image: daprio/dapr:1.13.0
+    container_name: farmer-dapr-placement
+    restart: unless-stopped
+    command: ["./placement", "--port", "50005"]
+    ports:
+      - "50005:50005"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 50005 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  mojaloop-simulator:
+    image: mojaloop/simulator:latest
+    container_name: farmer-mojaloop
+    restart: unless-stopped
+    ports:
+      - "8444:8444"
+    environment:
+      PARTIES_ENDPOINT: http://mojaloop-simulator:8444
+      LOG_LEVEL: info
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8444/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  # ============================================================
+  # LAYER 5: OBSERVABILITY (standalone)
+  # ============================================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: farmer-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=30d"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: farmer-grafana
+    restart: unless-stopped
+    ports:
+      - "3100:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./config/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.54
+    container_name: farmer-jaeger
+    restart: unless-stopped
+    ports:
+      - "16686:16686"
+      - "14268:14268"
+      - "4317:4317"
+      - "4318:4318"
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+      SPAN_STORAGE_TYPE: memory
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:14269/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  loki:
+    image: grafana/loki:2.9.3
+    container_name: farmer-loki
+    restart: unless-stopped
+    ports:
+      - "3101:3100"
+    volumes:
+      - ./config/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3100/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  promtail:
+    image: grafana/promtail:2.9.3
+    container_name: farmer-promtail
+    restart: unless-stopped
+    volumes:
+      - ./config/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+      - /var/log:/var/log:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  vault:
+    image: hashicorp/vault:1.15
+    container_name: farmer-vault
+    restart: unless-stopped
+    ports:
+      - "8200:8200"
+    environment:
+      VAULT_ADDR: "http://0.0.0.0:8200"
+      VAULT_API_ADDR: "http://vault:8200"
+    volumes:
+      - vault-data:/vault/data
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      test: ["CMD", "vault", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  # ============================================================
+  # LAYER 6: MAIN API (needs PG + Redis)
+  # ============================================================
+  app:
+    image: farmconnect/api:latest
+    container_name: farmer-app
+    restart: unless-stopped
+    ports:
+      - "3000:3001"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@pgbouncer:6432/farmer_data
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      KAFKA_BROKERS: kafka:9092
+      KEYCLOAK_URL: http://keycloak:8080
+      PERMIFY_ENDPOINT: http://farmer-permify:3476
+      OPENSEARCH_URL: http://opensearch:9200
+      TEMPORAL_ADDRESS: temporal:7233
+      TIGERBEETLE_ADDRESS: tigerbeetle:3000
+      MOJALOOP_API_URL: http://mojaloop-simulator:8444
+      DAPR_HOST: dapr-placement
+      DAPR_HTTP_PORT: 3500
+      APISIX_ADMIN_URL: http://apisix:9180
+      FLUVIO_URL: http://fluvio:9003
+      JWT_SECRET: ${JWT_SECRET}
+      DEFAULT_CURRENCY: NGN
+      ALLOWED_ORIGINS: "https://america.tail3a833f.ts.net,http://america:9080,http://america:3000,http://100.79.80.119:9080,http://100.79.80.119:3000,http://100.79.80.119:3001,http://localhost:9080,http://localhost:3000,http://localhost:3001,http://localhost:5173"
+      FEATURE_FLAGS_SERVICE_URL: http://farmer-feature-flags:8101
+      WHATSAPP_SERVICE_URL: http://farmer-whatsapp-service:8102
+      QR_TRACEABILITY_SERVICE_URL: http://farmer-qr-traceability:8103
+      TILE_CACHE_URL: http://farmer-tile-cache:8097
+      GPS_STREAMING_SERVICE_URL: http://farmer-gps-streaming:8098
+      SPATIAL_QUERY_SERVICE_URL: http://farmer-spatial-queries:8099
+      GEOCODING_SERVICE_URL: http://farmer-geocoding:8100
+      SEARCH_SERVICE_URL: http://farmer-search-proxy:8104
+      WAF_SERVICE_URL: http://farmer-waf-security:8105
+      FLUVIO_SERVICE_URL: http://farmer-fluvio-streaming:8106
+      WEATHER_SERVICE_URL: http://farmer-weather-alerts:8107
+      CREDIT_SCORING_SERVICE_URL: http://farmer-credit-scoring:8108
+      VOICE_SERVICE_URL: http://farmer-voice-navigation:8109
+      ML_SERVICE_URL: http://farmer-ml-service:8001
+      BLOCKCHAIN_PROVENANCE_SERVICE_URL: http://farmer-blockchain-provenance:8110
+      URBAN_DELIVERY_SERVICE_URL: http://farmer-urban-delivery:8111
+      CEA_AI_SERVICE_URL: http://farmer-cea-ai:8112
+      AQUACULTURE_POND_SERVICE_URL: http://farmer-aquaculture-pond:8113
+      AQUACULTURE_FEED_SERVICE_URL: http://farmer-aquaculture-feed:8114
+      AQUACULTURE_AI_SERVICE_URL: http://farmer-aquaculture-ai:8115
+      CONTRACT_FARMING_SERVICE_URL: http://farmer-contract-farming:8116
+      WAREHOUSE_RECEIPT_SERVICE_URL: http://farmer-warehouse-receipt:8117
+      CONVERSATIONAL_COMMERCE_SERVICE_URL: http://farmer-conversational-commerce:8118
+      LOAN_ORCHESTRATOR_SERVICE_URL: http://farmer-loan-orchestrator:8099
+      IMAGE_SERVICE_URL: http://farmer-image-service:8080
+      REALTIME_SERVICE_URL: http://farmer-realtime-service:8012
+      DAPR_SERVICE_URL: http://farmer-dapr-service:8013
+      DELIVERY_SERVICE_URL: http://farmer-delivery-service:8091
+      DRONE_SERVICE_URL: http://farmer-drone-service:8097
+      SUPPLY_CHAIN_SERVICE_URL: http://farmer-supply-chain-service:8099
+      TIGERBEETLE_SERVICE_URL: http://farmer-tigerbeetle-service:8084
+      MOBILE_MONEY_SERVICE_URL: http://farmer-mobile-money:8090
+      MESSAGING_MIDDLEWARE_URL: http://farmer-messaging-middleware:8091
+      ORCHESTRATOR_COORDINATOR_URL: http://farmer-orchestrator-coordinator:8086
+      SYNC_ORCHESTRATOR_URL: http://farmer-sync-orchestrator:8090
+      EQUIPMENT_FLEET_SERVICE_URL: http://farmer-equipment-fleet-service:8098
+      GPS_SERVICE_URL: http://farmer-gps-service:8080
+      PRICE_PREDICTION_SERVICE_URL: http://farmer-price-prediction-service:8093
+      OLLAMA_SERVICE_URL: http://farmer-ollama-service:8087
+      LAKEHOUSE_SERVICE_URL: http://farmer-lakehouse-service:8085
+      WEATHER_SERVICE_V2_URL: http://farmer-weather-service:8069
+      FEDERATED_LEARNING_SERVICE_URL: http://farmer-federated-learning:8098
+      SATELLITE_SERVICE_URL: http://farmer-satellite-service:8095
+      KYC_VERIFICATION_SERVICE_URL: http://farmer-kyc-verification:8104
+      LOAN_WORKER_URL: http://farmer-loan-worker:8020
+      TEMPORAL_WORKFLOWS_URL: http://farmer-temporal-workflows:8080
+      MESSAGING_ANALYTICS_URL: http://farmer-messaging-analytics:8094
+      SYNC_ANALYTICS_URL: http://farmer-sync-analytics:8091
+      COLD_CHAIN_SERVICE_URL: http://farmer-cold-chain-service:8092
+      INDOOR_FARMING_AI_URL: http://farmer-indoor-farming:8112
+      AGRI_LLM_URL: http://farmer-agri-llm:8060
+      SEDONA_SUPPLY_CHAIN_URL: http://farmer-sedona-supply-chain:8063
+      AUTH_SERVICE_URL: http://farmer-auth-service:8081
+      FARMER_SERVICE_URL: http://farmer-farmer-service:8082
+      ANALYTICS_SERVICE_URL: http://farmer-analytics-service:8082
+      AI_INSPECTION_URL: http://farmer-ai-inspection:8084
+      MARKETPLACE_SERVICE_URL: http://farmer-marketplace-service:8085
+      IOT_SERVICE_URL: http://farmer-iot-service:8086
+      NOTIFICATION_SERVICE_URL: http://farmer-notification-service:8087
+      ERP_INTEGRATION_URL: http://farmer-erp-integration:8088
+      AGRICULTURAL_MODELS_URL: http://farmer-agricultural-models:8089
+      MODEL_SERVING_URL: http://farmer-model-serving:8090
+      MOJALOOP_GATEWAY_URL: http://farmer-mojaloop-gateway:8091
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch(http://127.0.0.1:3001/health).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "2.0"
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  # ============================================================
+  # LAYER 7: POLYGLOT MICROSERVICES (internal only - NO ports)
+  # ============================================================
+  feature-flags:
+    image: farmconnect/feature-flags:latest
+    container_name: farmer-feature-flags
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8101/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  whatsapp-service:
+    image: farmconnect/whatsapp-service:latest
+    container_name: farmer-whatsapp-service
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8102/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  qr-traceability:
+    image: farmconnect/qr-traceability:latest
+    container_name: farmer-qr-traceability
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8103/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  geocoding:
+    image: farmconnect/geocoding:latest
+    container_name: farmer-geocoding
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8100/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  weather-alerts:
+    image: farmconnect/weather-alerts:latest
+    container_name: farmer-weather-alerts
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8107/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  credit-scoring:
+    image: farmconnect/credit-scoring:latest
+    container_name: farmer-credit-scoring
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: farmer_data
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8108/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  voice-navigation:
+    image: farmconnect/voice-navigation:latest
+    container_name: farmer-voice-navigation
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8109/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  gps-streaming:
+    image: farmconnect/gps-streaming:latest
+    container_name: farmer-gps-streaming
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8098/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  tile-cache:
+    image: farmconnect/tile-cache:latest
+    container_name: farmer-tile-cache
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8097/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  ml-service:
+    image: farmconnect/ml-service:latest
+    container_name: farmer-ml-service
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  gps-service:
+    image: farmconnect/gps-service:latest
+    container_name: farmer-gps-service
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  spatial-queries:
+    image: farmconnect/spatial-queries:latest
+    container_name: farmer-spatial-queries
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: farmer_data
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8099/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  search-proxy:
+    image: farmconnect/search-proxy:latest
+    container_name: farmer-search-proxy
+    restart: unless-stopped
+    environment:
+      OPENSEARCH_URL: http://opensearch:9200
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8104/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  waf-security:
+    image: farmconnect/waf-security:latest
+    container_name: farmer-waf-security
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+      openappsec:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8105/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  fluvio-streaming:
+    image: farmconnect/fluvio-streaming:latest
+    container_name: farmer-fluvio-streaming
+    restart: unless-stopped
+    environment:
+      FLUVIO_URL: http://fluvio:9003
+      KAFKA_BROKERS: kafka:9092
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      fluvio:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8106/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  geocoding-service:
+    image: farmconnect/geocoding-service:latest
+    container_name: farmer-geocoding-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8100/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  weather-service:
+    image: farmconnect/weather-service:latest
+    container_name: farmer-weather-service
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8069/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  voice-service:
+    image: farmconnect/voice-service:latest
+    container_name: farmer-voice-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8068/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  federated-learning:
+    image: farmconnect/federated-learning:latest
+    container_name: farmer-federated-learning
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8065/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  indoor-farming-ai:
+    image: farmconnect/indoor-farming-ai:latest
+    container_name: farmer-indoor-farming-ai
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8112/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  kyc-verification:
+    image: farmconnect/kyc-verification:latest
+    container_name: farmer-kyc-verification
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8064/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  lakehouse-service:
+    image: farmconnect/lakehouse-service:latest
+    container_name: farmer-lakehouse-service
+    restart: unless-stopped
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: farmer_data
+    depends_on:
+      kafka:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8085/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  loan-worker:
+    image: farmconnect/loan-worker:latest
+    container_name: farmer-loan-worker
+    restart: unless-stopped
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      temporal:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8020/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  ollama-service:
+    image: farmconnect/ollama-service:latest
+    container_name: farmer-ollama-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8087/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  price-prediction-service:
+    image: farmconnect/price-prediction-service:latest
+    container_name: farmer-price-prediction-service
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8062/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  satellite-service:
+    image: farmconnect/satellite-service:latest
+    container_name: farmer-satellite-service
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8067/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  sedona-supply-chain:
+    image: farmconnect/sedona-supply-chain:latest
+    container_name: farmer-sedona-supply-chain
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8063/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  sync-analytics:
+    image: farmconnect/sync-analytics:latest
+    container_name: farmer-sync-analytics
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8091/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  temporal-workflows:
+    image: farmconnect/temporal-workflows:latest
+    container_name: farmer-temporal-workflows
+    restart: unless-stopped
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  blockchain-provenance:
+    image: farmconnect/blockchain-provenance:latest
+    container_name: farmer-blockchain-provenance
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8110/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  aquaculture-pond:
+    image: farmconnect/aquaculture-pond:latest
+    container_name: farmer-aquaculture-pond
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8113/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  contract-farming:
+    image: farmconnect/contract-farming:latest
+    container_name: farmer-contract-farming
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8120/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  delivery-service:
+    image: farmconnect/delivery-service:latest
+    container_name: farmer-delivery-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8091/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  drone-service:
+    image: farmconnect/drone-service:latest
+    container_name: farmer-drone-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8097/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  image-service:
+    image: farmconnect/image-service:latest
+    container_name: farmer-image-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8011/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  realtime-service:
+    image: farmconnect/realtime-service:latest
+    container_name: farmer-realtime-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8012/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  dapr-service:
+    image: farmconnect/dapr-service:latest
+    container_name: farmer-dapr-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8013/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  supply-chain-service:
+    image: farmconnect/supply-chain-service:latest
+    container_name: farmer-supply-chain-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8099/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  tigerbeetle-service:
+    image: farmconnect/tigerbeetle-service:latest
+    container_name: farmer-tigerbeetle-service
+    restart: unless-stopped
+    environment:
+      TIGERBEETLE_ADDRESS: tigerbeetle:3000
+    depends_on:
+      tigerbeetle:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8084/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  equipment-fleet-service:
+    image: farmconnect/equipment-fleet-service:latest
+    container_name: farmer-equipment-fleet-service
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8098/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  loan-orchestrator:
+    image: farmconnect/loan-orchestrator:latest
+    container_name: farmer-loan-orchestrator
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8099/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  mobile-money-service:
+    image: farmconnect/mobile-money-service:latest
+    container_name: farmer-mobile-money-service
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8090/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  messaging-middleware:
+    image: farmconnect/messaging-middleware:latest
+    container_name: farmer-messaging-middleware
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8091/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  orchestrator-coordinator:
+    image: farmconnect/orchestrator-coordinator:latest
+    container_name: farmer-orchestrator-coordinator
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      KAFKA_BROKERS: kafka:9092
+      TEMPORAL_ADDRESS: temporal:7233
+    depends_on:
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      temporal:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8086/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  sync-orchestrator:
+    image: farmconnect/sync-orchestrator:latest
+    container_name: farmer-sync-orchestrator
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: farmer_data
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8090/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  urban-delivery:
+    image: farmconnect/urban-delivery:latest
+    container_name: farmer-urban-delivery
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8111/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  aquaculture-feed:
+    image: farmconnect/aquaculture-feed:latest
+    container_name: farmer-aquaculture-feed
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8114/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  autonomous-ops:
+    image: farmconnect/autonomous-ops:latest
+    container_name: farmer-autonomous-ops
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8119/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  iot-gateway:
+    image: farmconnect/iot-gateway:latest
+    container_name: farmer-iot-gateway
+    restart: unless-stopped
+    environment:
+      KAFKA_BROKERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8116/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  isobus-gateway:
+    image: farmconnect/isobus-gateway:latest
+    container_name: farmer-isobus-gateway
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8117/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  openappsec-waf:
+    image: farmconnect/openappsec-waf:latest
+    container_name: farmer-openappsec-waf
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8090/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  tokenization-service:
+    image: farmconnect/tokenization-service:latest
+    container_name: farmer-tokenization-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8103/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  warehouse-receipt:
+    image: farmconnect/warehouse-receipt:latest
+    container_name: farmer-warehouse-receipt
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8122/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  image-processor:
+    image: farmconnect/image-processor:latest
+    container_name: farmer-image-processor
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8015/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  agri-llm:
+    image: farmconnect/agri-llm:latest
+    container_name: farmer-agri-llm
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8060/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  aquaculture-ai:
+    image: farmconnect/aquaculture-ai:latest
+    container_name: farmer-aquaculture-ai
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8115/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  cold-chain-service:
+    image: farmconnect/cold-chain-service:latest
+    container_name: farmer-cold-chain-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8061/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  conversational-commerce:
+    image: farmconnect/conversational-commerce:latest
+    container_name: farmer-conversational-commerce
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8121/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+
+      - .
+
+      - .
+
+  ml-models:
+    image: farmconnect/ml-models:latest
+    container_name: farmer-ml-models
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8093/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  voice-service-py:
+    image: farmconnect/voice-service:latest
+    container_name: farmer-voice-service-py
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8068/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  features:
+    image: farmconnect/features:latest
+    container_name: farmer-features
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8092/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  cea-ai:
+    image: farmconnect/cea-ai:latest
+    container_name: farmer-cea-ai
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8112/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  opensearch-service:
+    image: farmconnect/opensearch-service:latest
+    container_name: farmer-opensearch-service
+    restart: unless-stopped
+    environment:
+      OPENSEARCH_URL: http://opensearch:9200
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8091/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  mojaloop-gateway:
+    image: farmconnect/mojaloop-gateway:latest
+    container_name: farmer-mojaloop-gateway
+    restart: unless-stopped
+    environment:
+      MOJALOOP_API_URL: http://mojaloop-simulator:8444
+    depends_on:
+      mojaloop-simulator:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8091/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  agricultural-models-python:
+    image: farmconnect/agricultural-models-python:latest
+    container_name: farmer-agricultural-models-python
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8089/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  model-serving:
+    image: farmconnect/model-serving:latest
+    container_name: farmer-model-serving
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8090/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  farmland-service:
+    image: farmconnect/farmer-service:latest
+    container_name: farmer-farmland-service
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: farmer_data
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8082/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  analytics-service:
+    image: farmconnect/analytics-service:latest
+    container_name: farmer-analytics-service
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: farmer_data
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@postgres:5432/farmer_data
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  auth-service:
+    image: farmconnect/auth-service:latest
+    container_name: farmer-auth-service
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      KEYCLOAK_URL: http://keycloak:8080
+    depends_on:
+      redis:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  ai-inspection:
+    image: farmconnect/ai-inspection:latest
+    container_name: farmer-ai-inspection
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8084/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  marketplace-service:
+    image: farmconnect/marketplace-service:latest
+    container_name: farmer-marketplace-service
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8085/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  iot-service:
+    image: farmconnect/iot-service:latest
+    container_name: farmer-iot-service
+    restart: unless-stopped
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8086/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  notification-service:
+    image: farmconnect/notification-service:latest
+    container_name: farmer-notification-service
+    restart: unless-stopped
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8087/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+  erp-integration-service:
+    image: farmconnect/erp-integration-service:latest
+    container_name: farmer-erp-integration-service
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: farmer_data
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8088/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+
+volumes:
+  postgres-data:
+  redis-data:
+  kafka-data:
+  opensearch-data:
+  tigerbeetle-data:
+  fluvio-data:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  vault-data:
+
+networks:
+  farmconnect-network:
+    external: true
+   # driver: bridge

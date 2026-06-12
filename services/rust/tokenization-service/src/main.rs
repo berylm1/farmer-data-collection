@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // Domain Types
 // ============================================================================
 
-#[derive(Clone, Debug, serde_like)]
+#[derive(Clone, Debug)]
 struct CommodityToken {
     token_id: String,
     crop_type: String,
@@ -35,7 +35,7 @@ struct CommodityToken {
     created_at: String,
 }
 
-#[derive(Clone, Debug, serde_like)]
+#[derive(Clone, Debug)]
 struct TokenLocation {
     latitude: f64,
     longitude: f64,
@@ -94,6 +94,7 @@ struct OrderBook {
     trades: Vec<Trade>,
 }
 
+#[derive(Clone)]
 struct Trade {
     trade_id: String,
     buy_order_id: String,

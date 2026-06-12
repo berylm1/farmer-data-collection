@@ -1,0 +1,107 @@
+
+
+services:
+  app:
+    environment:
+      KEYCLOAK_REALM: farmer-data-collection
+      KEYCLOAK_CLIENT_ID: farmer-web-app
+  gps-streaming:
+    image: farmconnect/gps-streaming:latest
+    container_name: farmer-gps-streaming
+    restart: unless-stopped
+    environment:
+      GPS_STREAMING_PORT: 8098
+    networks:
+      - farmconnect-network
+    dns_search:
+      - .
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8098 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+  kyc-verification:
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8104/health')\" || exit 1"]
+
+  satellite-service:
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8095/health')\" || exit 1"]
+
+  sedona-supply-chain:
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8095/health')\" || exit 1"]
+
+  voice-service:
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8097/health')\" || exit 1"]
+  aquaculture-feed:
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8114 || exit 1"]
+
+  urban-delivery:
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8111 || exit 1"]
+  agri-llm:
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8103/health')\" || exit 1"]
+  loan-orchestrator:
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      KAFKA_BROKERS: kafka:9092
+      TEMPORAL_ADDRESS: temporal:7233
+      TIGERBEETLE_ADDRESS: tigerbeetle:3000
+      PERMIFY_ENDPOINT: permify:3478
+      DAPR_HTTP_ENDPOINT: http://dapr-placement:50005
+      PORT: 8090
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8090/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+  iot-service:
+    environment:
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@pgbouncer:6432/farmer_data
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      KAFKA_BROKERS: kafka:9092
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8085/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+  notification-service:
+    environment:
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@pgbouncer:6432/farmer_data
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      KAFKA_BROKERS: kafka:9092
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/health || exit 1"]
+  ml-models:
+    command: ["uvicorn", "inference.server:app", "--host", "0.0.0.0", "--port", "8096"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8096/health')\" || exit 1"]
+
+  weather-service:
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8096/health')\" || exit 1"]
+  price-prediction-service:
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8093/health')\" || exit 1"]
+  cold-chain-service:
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8092/health')\" || exit 1"]
+  agricultural-models-python:
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8086/health')\" || exit 1"]
+  analytics-service:
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      KAFKA_BROKERS: kafka:9092
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8082/health')\" || exit 1"]
+  federated-learning:
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8098/health')\" || exit 1"]

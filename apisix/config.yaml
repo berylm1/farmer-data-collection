@@ -1,22 +1,14 @@
 apisix:
   node_listen: 9080
-  enable_ipv6: false
-  ssl:
-    enable: true
-    listen_port: 9443
+  enable_admin: false
+  config_center: yaml
 
-deployment:
-  admin:
-    admin_listen:
-      ip: 0.0.0.0
-      port: 9180
-    admin_key:
-      - name: admin
-        key: farmconnect-apisix-admin-key
-        role: admin
-
-plugin_attr:
-  prometheus:
-    export_addr:
-      ip: 0.0.0.0
-      port: 9091
+nginx_config:
+  resolver:
+    - 127.0.0.11
+    - 172.18.0.1
+    valid: 30s
+  http:
+    lua_shared_dict:
+      limit-req-store: 10m
+      limit-count-store: 10m

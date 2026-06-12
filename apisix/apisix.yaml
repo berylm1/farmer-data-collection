@@ -1,70 +1,22 @@
 routes:
-  # Main App
+  - uri: /ws/track/*
+    upstream:
+      type: roundrobin
+      nodes:
+        "farmer-gps-streaming:8098": 1
+    enable_websocket: true
+
+  - uri: /ws/driver/*
+    upstream:
+      type: roundrobin
+      nodes:
+        "farmer-gps-streaming:8098": 1
+    enable_websocket: true
   - uri: /*
+    enable_websocket: true
     upstream:
       type: roundrobin
       nodes:
-        "app:3001": 1
-    plugins:
-      proxy-rewrite:
-        regex_uri: ["^/api/(.*)", "/$1"]
-      limit-req:
-        rate: 100
-        burst: 50
-        key_type: var
-        key: remote_addr
-      cors:
-        allow_origins: "*"
-        allow_methods: "GET, POST, PUT, PATCH, DELETE, OPTIONS"
-        allow_headers: "Content-Type, Authorization"
-
-  # Feature Flags
-  - uri: /api/flags/*
-    upstream:
-      type: roundrobin
-      nodes:
-        "feature-flags:8101": 1
-    plugins:
-      proxy-rewrite:
-        regex_uri: ["^/api/flags/(.*)", "/$1"]
-
-  # Search
-  - uri: /api/search/*
-    upstream:
-      type: roundrobin
-      nodes:
-        "search-proxy:8104": 1
-    plugins:
-      proxy-rewrite:
-        regex_uri: ["^/api/search/(.*)", "/$1"]
-      proxy-cache:
-        cache_key: ["$uri", "$args"]
-        cache_ttl: 60
-
-  # Weather
-  - uri: /api/weather/*
-    upstream:
-      type: roundrobin
-      nodes:
-        "weather-alerts:8107": 1
-    plugins:
-      proxy-rewrite:
-        regex_uri: ["^/api/weather/(.*)", "/$1"]
-
-  # Static Assets CDN
-  - uri: /assets/*
-    upstream:
-      type: roundrobin
-      nodes:
-        "app:3000": 1
-    plugins:
-      proxy-cache:
-        cache_key: ["$uri"]
-        cache_ttl: 86400
-        cache_http_status: [200]
-      response-rewrite:
-        headers:
-          set:
-            Cache-Control: "public, max-age=31536000, immutable"
+        "farmer-app:3001": 1
 
 #END

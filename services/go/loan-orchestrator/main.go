@@ -14,7 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
-	mw "farmer-platform/services/go/shared/middleware"
+	mw "github.com/farmconnect/shared/middleware"
 )
 
 // LoanApplication represents a loan application
@@ -172,14 +172,14 @@ func (o *LoanOrchestrator) ApplyForLoan(ctx context.Context, farmerID int, amoun
 
 	// Publish loan application event to Kafka
 	event := mw.CreateDeterministicEvent(
-		mw.EventTypes.CREATED,
+		mw.EventTypes.Created,
 		"loan_application",
 		applicationID,
 		farmerID,
 		app,
 		idempotencyKey,
 	)
-	if err := o.kafka.PublishEvent(ctx, mw.Topics.AUDIT_TRAIL, event); err != nil {
+	if err := o.kafka.PublishEvent(ctx, mw.Topics.AuditTrail, event); err != nil {
 		log.Printf("[LoanOrchestrator] Warning: Failed to publish event: %v", err)
 	}
 
@@ -250,14 +250,14 @@ func (o *LoanOrchestrator) ApproveLoan(ctx context.Context, applicationID int, a
 
 	// Publish approval event
 	event := mw.CreateDeterministicEvent(
-		mw.EventTypes.UPDATED,
+		mw.EventTypes.Updated,
 		"loan_application",
 		applicationID,
 		approverID,
 		map[string]interface{}{"status": "approved", "approved_at": now},
 		idempotencyKey,
 	)
-	o.kafka.PublishEvent(ctx, mw.Topics.AUDIT_TRAIL, event)
+	o.kafka.PublishEvent(ctx, mw.Topics.AuditTrail, event)
 
 	// Invalidate cache
 	if o.cache != nil {
@@ -338,17 +338,17 @@ func (o *LoanOrchestrator) DisburseLoan(ctx context.Context, applicationID int, 
 
 	// Publish disbursement event
 	event := mw.CreateDeterministicEvent(
-		mw.EventTypes.UPDATED,
+		mw.EventTypes.Updated,
 		"loan_application",
 		applicationID,
 		disburserID,
 		map[string]interface{}{"status": "disbursed", "disbursed_at": now, "amount": app.Amount},
 		idempotencyKey,
 	)
-	o.kafka.PublishEvent(ctx, mw.Topics.AUDIT_TRAIL, event)
+	o.kafka.PublishEvent(ctx, mw.Topics.AuditTrail, event)
 
 	// Publish via Dapr as well
-	o.dapr.PublishEvent(ctx, mw.DaprTopics.NOTIFICATIONS, map[string]interface{}{
+	o.dapr.PublishEvent(ctx, mw.DaprTopics.Notifications, map[string]interface{}{
 		"type":       "loan_disbursed",
 		"farmer_id":  app.FarmerID,
 		"loan_id":    applicationID,
