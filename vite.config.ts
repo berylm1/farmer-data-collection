@@ -52,8 +52,8 @@ const pwaPlugin = VitePWA({
         }
       },
       {
-        urlPattern: regex('^https://fonts\\.googleapis\\.com/.*'),
-        handler: 'NetworkOnly',
+        urlPattern: regex('^https://fonts\\\\.googleapis\\\\.com/.*'),
+        handler: 'NetworkFirst',
         options: {
           cacheName: 'google-fonts-css',
           networkTimeoutSeconds: 10,
