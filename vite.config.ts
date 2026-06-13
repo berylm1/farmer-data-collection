@@ -5,184 +5,128 @@ import path from "path";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
 
-const plugins = [
-  react(), 
-  tailwindcss(), 
-  VitePWA({
-    registerType: 'autoUpdate',
-    includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
-    manifest: {
-      name: 'AgriFinance Platform',
-      short_name: 'AgriFinance',
-      description: 'Comprehensive agricultural data collection and financial management platform',
-      theme_color: '#16a34a',
-      background_color: '#ffffff',
-      display: 'standalone',
-      orientation: 'portrait-primary',
-      scope: '/',
-      start_url: '/',
-      categories: ['finance', 'business', 'productivity'],
-      icons: [
-        {
-          src: '/icons/icon-72x72.png',
-          sizes: '72x72',
-          type: 'image/png',
-          purpose: 'maskable any'
-        },
-        {
-          src: '/icons/icon-96x96.png',
-          sizes: '96x96',
-          type: 'image/png',
-          purpose: 'maskable any'
-        },
-        {
-          src: '/icons/icon-128x128.png',
-          sizes: '128x128',
-          type: 'image/png',
-          purpose: 'maskable any'
-        },
-        {
-          src: '/icons/icon-144x144.png',
-          sizes: '144x144',
-          type: 'image/png',
-          purpose: 'maskable any'
-        },
-        {
-          src: '/icons/icon-152x152.png',
-          sizes: '152x152',
-          type: 'image/png',
-          purpose: 'maskable any'
-        },
-        {
-          src: '/icons/icon-192x192.png',
-          sizes: '192x192',
-          type: 'image/png',
-          purpose: 'maskable any'
-        },
-        {
-          src: '/icons/icon-384x384.png',
-          sizes: '384x384',
-          type: 'image/png',
-          purpose: 'maskable any'
-        },
-        {
-          src: '/icons/icon-512x512.png',
-          sizes: '512x512',
-          type: 'image/png',
-          purpose: 'maskable any'
+// Helper to create RegExp strings for workbox (avoids TS parsing issues)
+const regex = (pattern: string, flags = 'i') => new RegExp(pattern, flags);
+
+const pwaPlugin = VitePWA({
+  registerType: 'autoUpdate',
+  includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'masked-icon.svg'],
+  manifest: {
+    name: 'AgriFinance Platform',
+    short_name: 'AgriFinance',
+    description: 'Comprehensive agricultural data collection and financial management platform',
+    theme_color: '#16a34a',
+    background_color: '#ffffff',
+    display: 'standalone',
+    orientation: 'portrait-primary',
+    scope: '/',
+    start_url: '/',
+    categories: ['finance', 'business', 'productivity'],
+    icons: [
+      { src: '/icons/icon-72x72.png', sizes: '72x72', type: 'image/png', purpose: 'maskable any' },
+      { src: '/icons/icon-96x96.png', sizes: '96x96', type: 'image/png', purpose: 'maskable any' },
+      { src: '/icons/icon-128x128.png', sizes: '128x128', type: 'image/png', purpose: 'maskable any' },
+      { src: '/icons/icon-144x144.png', sizes: '144x144', type: 'image/png', purpose: 'maskable any' },
+      { src: '/icons/icon-152x152.png', sizes: '152x152', type: 'image/png', purpose: 'maskable any' },
+      { src: '/icons/icon-192x192.png', sizes: '192x192', type: 'image/png', purpose: 'maskable any' },
+      { src: '/icons/icon-384x384.png', sizes: '384x384', type: 'image/png', purpose: 'maskable any' },
+      { src: '/icons/icon-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable any' }
+    ],
+    shortcuts: [
+      { name: 'Dashboard', short_name: 'Dashboard', description: 'View your dashboard', url: '/', icons: [{ src: '/icons/icon-96x96.png', sizes: '96x96' }] },
+      { name: 'Add Farmer', short_name: 'Add Farmer', description: 'Register a new farmer', url: '/quick-farmer-registration', icons: [{ src: '/icons/icon-96x96.png', sizes: '96x96' }] },
+      { name: 'Farm Geotagging', short_name: 'Geotagging', description: 'Capture farm boundaries', url: '/farm-geotagging', icons: [{ src: '/icons/icon-96x96.png', sizes: '96x96' }] }
+    ]
+  },
+  workbox: {
+    maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
+    runtimeCaching: [
+      {
+        urlPattern: regex('^https?://.*/api/.*'),
+        handler: 'NetworkFirst',
+        options: {
+          cacheName: 'api-cache',
+          expiration: { maxEntries: 100, maxAgeSeconds: 60 * 60 * 24 },
+          networkTimeoutSeconds: 10,
+          cacheableResponse: { statuses: [0, 200] }
         }
-      ],
-      shortcuts: [
-        {
-          name: 'Dashboard',
-          short_name: 'Dashboard',
-          description: 'View your dashboard',
-          url: '/',
-          icons: [{ src: '/icons/icon-96x96.png', sizes: '96x96' }]
-        },
-        {
-          name: 'Add Farmer',
-          short_name: 'Add Farmer',
-          description: 'Register a new farmer',
-          url: '/quick-farmer-registration',
-          icons: [{ src: '/icons/icon-96x96.png', sizes: '96x96' }]
-        },
-        {
-          name: 'Farm Geotagging',
-          short_name: 'Geotagging',
-          description: 'Capture farm boundaries',
-          url: '/farm-geotagging',
-          icons: [{ src: '/icons/icon-96x96.png', sizes: '96x96' }]
+      },
+      {
+        urlPattern: regex('^https://fonts\\.googleapis\\.com/.*'),
+        handler: 'NetworkOnly',
+        options: {
+          cacheName: 'google-fonts-css',
+          networkTimeoutSeconds: 10,
+          cacheableResponse: { statuses: [0, 200] }
         }
-      ]
-    },
-    workbox: {
-      // Allow the main application bundle to be precached until the route-level split is optimized further
-      maximumFileSizeToCacheInBytes: 10 * 1024 * 1024,
-      // Cache strategies for different resource types
-      runtimeCaching: [
-        {
-          // Cache API responses with network-first strategy
-          urlPattern: /^https?:\/\/.*\/api\/.*/i,
-          handler: 'NetworkFirst',
-          options: {
-            cacheName: 'api-cache',
-            expiration: {
-              maxEntries: 100,
-              maxAgeSeconds: 60 * 60 * 24 // 24 hours
-            },
-            networkTimeoutSeconds: 10,
-            cacheableResponse: {
-              statuses: [0, 200]
-            }
-          }
-        },
-        {
-          // Cache images with cache-first strategy
-          urlPattern: /\.(?:png|jpg|jpeg|svg|gif|webp)$/i,
-          handler: 'CacheFirst',
-          options: {
-            cacheName: 'image-cache',
-            expiration: {
-              maxEntries: 200,
-              maxAgeSeconds: 60 * 60 * 24 * 30 // 30 days
-            }
-          }
-        },
-        {
-          // Cache fonts with cache-first strategy
-          urlPattern: /\.(?:woff|woff2|ttf|otf|eot)$/i,
-          handler: 'CacheFirst',
-          options: {
-            cacheName: 'font-cache',
-            expiration: {
-              maxEntries: 20,
-              maxAgeSeconds: 60 * 60 * 24 * 365 // 1 year
-            }
-          }
-        },
-        {
-          // Cache static assets with stale-while-revalidate
-          urlPattern: /\.(?:js|css)$/i,
-          handler: 'StaleWhileRevalidate',
-          options: {
-            cacheName: 'static-cache',
-            expiration: {
-              maxEntries: 100,
-              maxAgeSeconds: 60 * 60 * 24 * 7 // 7 days
-            }
-          }
-        },
-        {
-          // Cache map tiles with cache-first
-          urlPattern: /^https?:\/\/.*\/(tiles|mapbox|maptiler)\/.*/i,
-          handler: 'CacheFirst',
-          options: {
-            cacheName: 'map-tile-cache',
-            expiration: {
-              maxEntries: 500,
-              maxAgeSeconds: 60 * 60 * 24 * 30 // 30 days
-            }
-          }
+      },
+      {
+        urlPattern: regex('^https://fonts\\.gstatic\\.com/.*'),
+        handler: 'CacheFirst',
+        options: {
+          cacheName: 'google-fonts-files',
+          expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 365 },
+          cacheableResponse: { statuses: [0, 200] }
         }
-      ],
-      // Pre-cache essential app shell files
-      globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-      // Skip waiting and claim clients immediately
-      skipWaiting: true,
-      clientsClaim: true,
-      // Clean up old caches
-      cleanupOutdatedCaches: true
-    },
-    devOptions: {
-      enabled: true,
-      type: 'module'
+      },
+      {
+        urlPattern: regex('\\.(?:png|jpg|jpeg|svg|gif|webp)$'),
+        handler: 'CacheFirst',
+        options: {
+          cacheName: 'image-cache',
+          expiration: { maxEntries: 200, maxAgeSeconds: 60 * 60 * 24 * 30 }
+        }
+      },
+      {
+        urlPattern: regex('\\.(?:woff|woff2|ttf|otf|eot)$'),
+        handler: 'CacheFirst',
+        options: {
+          cacheName: 'font-cache',
+          expiration: { maxEntries: 20, maxAgeSeconds: 60 * 60 * 24 * 365 }
+        }
+      },
+      {
+        urlPattern: regex('\\.(?:js|css)$'),
+        handler: 'StaleWhileRevalidate',
+        options: {
+          cacheName: 'static-cache',
+          expiration: { maxEntries: 100, maxAgeSeconds: 60 * 60 * 24 * 7 }
+        }
+      },
+      {
+        urlPattern: regex('^https?://.*/(tiles|mapbox|maptiler)/.*'),
+        handler: 'CacheFirst',
+        options: {
+          cacheName: 'map-tile-cache',
+          expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30 }
+        }
+      }
+    ],
+    globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+    skipWaiting: true,
+    clientsClaim: true,
+    cleanupOutdatedCaches: true
+  },
+  devOptions: {
+    enabled: true,
+    type: 'module'
+  }
+});
+
+const copySqlWasmPlugin = {
+  name: 'copy-sql-wasm',
+  writeBundle() {
+    const src = path.resolve(__dirname, 'node_modules/sql.js/dist/sql-wasm.wasm');
+    const dest = path.resolve(__dirname, 'dist/public/sql-wasm.wasm');
+    if (fs.existsSync(src)) {
+      fs.copyFileSync(src, dest);
+      console.log('[Vite] Copied sql-wasm.wasm to dist/public/');
     }
-  })
-];
+  }
+};
 
 export default defineConfig({
-  plugins,
+  plugins: [react(), tailwindcss(), pwaPlugin, copySqlWasmPlugin],
   optimizeDeps: {},
   resolve: {
     alias: {
@@ -199,7 +143,6 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          // Vendor chunks — split large dependencies
           'vendor-react': ['react', 'react-dom'],
           'vendor-radix': [
             '@radix-ui/react-accordion', '@radix-ui/react-dialog',
@@ -218,7 +161,7 @@ export default defineConfig({
   },
   server: {
     port: 3000,
-    strictPort: false, // Will find next available port if 3000 is busy
+    strictPort: false,
     host: true,
     proxy: {
       '/api': {

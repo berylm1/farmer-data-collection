@@ -1,14 +1,19 @@
+// Fix for Issue 1: ResilientConnectionManager rewritten to use Socket.IO
+// File: client/src/services/resilient-connectivity.ts
+// Replace the entire file with this version
+
 /**
  * Resilient Connectivity Service for Low-Bandwidth / Offline Environments
- *
- * Designed for rural Africa where connectivity is unreliable:
+ * 
+ * REWRITTEN to use Socket.IO client (matches server at /socket.io/)
  * - Exponential backoff with jitter for reconnection
  * - Message queue that persists offline messages to IndexedDB
- * - Bandwidth detection and adaptive protocol switching (WS → SSE → polling)
+ * - Socket.IO transports: WebSocket → polling fallback
  * - Heartbeat/keepalive with configurable intervals
  * - Offline-first architecture: queue all actions, sync when online
- * - Graceful degradation: never block the UI on network state
  */
+
+import { io, Socket, connect } from 'socket.io-client';
 
 // ── Network Quality Detection ───────────────────────────────────────────
 
@@ -113,13 +118,10 @@ class OfflineMessageQueue {
 
   async enqueue(channel: string, payload: unknown, priority: "high" | "normal" | "low" = "normal"): Promise<void> {
     if (this.queue.length >= this.maxSize) {
-      // Drop lowest priority oldest messages
       const lowPriority = this.queue.filter(m => m.priority === "low");
       if (lowPriority.length > 0) {
-        const oldest = lowPriority[0];
-        await this.remove(oldest.id);
+        await this.remove(lowPriority[0].id);
       } else {
-        // Drop oldest normal priority
         const normal = this.queue.filter(m => m.priority === "normal");
         if (normal.length > 0) {
           await this.remove(normal[0].id);
@@ -141,7 +143,6 @@ class OfflineMessageQueue {
   }
 
   async dequeue(): Promise<QueuedMessage | null> {
-    // Priority order: high → normal → low
     const sorted = [...this.queue].sort((a, b) => {
       const priorityOrder = { high: 0, normal: 1, low: 2 };
       const pDiff = priorityOrder[a.priority] - priorityOrder[b.priority];
@@ -150,8 +151,7 @@ class OfflineMessageQueue {
     });
 
     if (sorted.length === 0) return null;
-    const msg = sorted[0];
-    return msg;
+    return sorted[0];
   }
 
   async remove(id: string): Promise<void> {
@@ -185,7 +185,7 @@ class OfflineMessageQueue {
   }
 }
 
-// ── Exponential Backoff with Jitter ─────────────────────────────────────
+// ── Exponential Backoff with Jitter ──────────────────────────────────────
 
 class ReconnectionStrategy {
   private attempt = 0;
@@ -201,11 +201,8 @@ class ReconnectionStrategy {
 
   nextDelay(): number {
     if (this.attempt >= this.maxAttempts) return -1;
-    // Exponential backoff: base * 2^attempt
     const exponential = this.baseDelay * Math.pow(2, this.attempt);
-    // Cap at maxDelay
     const capped = Math.min(exponential, this.maxDelay);
-    // Add jitter: ±25% randomization to prevent thundering herd
     const jitter = capped * (0.75 + Math.random() * 0.5);
     this.attempt++;
     return Math.round(jitter);
@@ -220,65 +217,53 @@ class ReconnectionStrategy {
   }
 }
 
-// ── Transport Layer ─────────────────────────────────────────────────────
-
-type TransportType = "websocket" | "sse" | "polling";
-
-interface TransportConfig {
-  wsUrl: string;
-  sseUrl: string;
-  pollingUrl: string;
-  pollingInterval: number;
-}
-
-type MessageHandler = (data: unknown) => void;
-
-// ── Resilient Connection Manager ────────────────────────────────────────
+// ── Resilient Connection Manager (Socket.IO) ──────────────────────────────
 
 export interface ResilientConnectionConfig {
-  wsUrl?: string;
-  sseUrl?: string;
-  pollingUrl?: string;
-  heartbeatInterval?: number;       // ms between heartbeats (default: 15s for low-bandwidth)
-  heartbeatTimeout?: number;        // ms to wait for heartbeat response (default: 10s)
-  pollingInterval?: number;         // ms between polls when in polling mode (default: 30s)
-  reconnectBaseDelay?: number;      // base reconnection delay ms (default: 1s)
-  reconnectMaxDelay?: number;       // max reconnection delay ms (default: 60s)
-  maxQueueSize?: number;            // max offline message queue size (default: 5000)
-  bandwidthAdaptive?: boolean;      // auto-switch transport based on bandwidth (default: true)
-  enableOfflineQueue?: boolean;     // persist messages when offline (default: true)
+  /** Server URL (e.g., "https://america.tail3a833f.ts.net") */
+  serverUrl?: string;
+  /** Socket.IO path (default: "/socket.io/") */
+  socketPath?: string;
+  /** Heartbeat interval in ms (default: 15s for low-bandwidth) */
+  heartbeatInterval?: number;
+  /** Heartbeat timeout in ms (default: 10s) */
+  heartbeatTimeout?: number;
+  /** Max queue size (default: 5000) */
+  maxQueueSize?: number;
+  /** Enable offline queue (default: true) */
+  enableOfflineQueue?: boolean;
 }
 
 export type ConnectionState = "connected" | "connecting" | "reconnecting" | "disconnected" | "offline";
 
 export interface ConnectionStatus {
   state: ConnectionState;
-  transport: TransportType | "none";
+  transport: string;
   network: NetworkStatus;
   queueSize: number;
   reconnectAttempts: number;
   lastConnected: number | null;
   lastError: string | null;
+  socketId: string | null;
 }
 
 type StatusChangeHandler = (status: ConnectionStatus) => void;
+type MessageHandler = (data: unknown) => void;
 
 export class ResilientConnectionManager {
   private config: Required<ResilientConnectionConfig>;
-  private ws: WebSocket | null = null;
-  private sse: EventSource | null = null;
-  private pollingTimer: ReturnType<typeof setInterval> | null = null;
+  private socket: Socket | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   private messageQueue: OfflineMessageQueue;
   private reconnection: ReconnectionStrategy;
-  private currentTransport: TransportType | "none" = "none";
   private state: ConnectionState = "disconnected";
   private lastConnected: number | null = null;
   private lastError: string | null = null;
   private clientId: string = "";
+  private socketId: string | null = null;
 
   private messageHandlers: Map<string, Set<MessageHandler>> = new Map();
   private statusHandlers: Set<StatusChangeHandler> = new Set();
@@ -287,27 +272,19 @@ export class ResilientConnectionManager {
   constructor(config: ResilientConnectionConfig = {}) {
     const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
     this.config = {
-      wsUrl: config.wsUrl || `${baseUrl.replace("http", "ws")}/ws`,
-      sseUrl: config.sseUrl || `${baseUrl}/api/events`,
-      pollingUrl: config.pollingUrl || `${baseUrl}/api/poll`,
+      serverUrl: config.serverUrl || baseUrl,
+      socketPath: config.socketPath || "/socket.io/",
       heartbeatInterval: config.heartbeatInterval || 15000,
       heartbeatTimeout: config.heartbeatTimeout || 10000,
-      pollingInterval: config.pollingInterval || 30000,
-      reconnectBaseDelay: config.reconnectBaseDelay || 1000,
-      reconnectMaxDelay: config.reconnectMaxDelay || 60000,
       maxQueueSize: config.maxQueueSize || 5000,
-      bandwidthAdaptive: config.bandwidthAdaptive ?? true,
       enableOfflineQueue: config.enableOfflineQueue ?? true,
     };
 
     this.messageQueue = new OfflineMessageQueue();
-    this.reconnection = new ReconnectionStrategy(
-      this.config.reconnectBaseDelay,
-      this.config.reconnectMaxDelay,
-    );
+    this.reconnection = new ReconnectionStrategy(1000, 60000, Infinity);
   }
 
-  // ── Public API ──────────────────────────────────────────────────────
+  // ── Public API ────────────────────────────────────────────────────────
 
   async connect(clientId: string): Promise<void> {
     this.clientId = clientId;
@@ -320,27 +297,26 @@ export class ResilientConnectionManager {
       return;
     }
 
-    const transport = this.selectTransport(network);
-    await this.connectTransport(transport);
+    await this.connectSocketIO();
   }
 
   disconnect(): void {
     this.stopNetworkMonitor();
     this.stopHeartbeat();
     this.clearReconnectTimer();
-    this.disconnectAll();
+    this.disconnectSocket();
     this.setState("disconnected");
   }
 
   async send(channel: string, payload: unknown, priority: "high" | "normal" | "low" = "normal"): Promise<void> {
     const message = JSON.stringify({ channel, payload, clientId: this.clientId, timestamp: Date.now() });
 
-    if (this.state === "connected" && this.ws?.readyState === WebSocket.OPEN) {
+    if (this.state === "connected" && this.socket?.connected) {
       try {
-        this.ws.send(message);
+        this.socket.emit("message", message);
         return;
       } catch (err) {
-        console.warn('[Resilient] WebSocket send failed, queuing:', String(err));
+        console.warn("[Resilient] Socket.IO send failed, queuing:", String(err));
       }
     }
 
@@ -363,7 +339,6 @@ export class ResilientConnectionManager {
 
   onStatusChange(handler: StatusChangeHandler): () => void {
     this.statusHandlers.add(handler);
-    // Immediately notify with current status
     handler(this.getStatus());
     return () => {
       this.statusHandlers.delete(handler);
@@ -373,196 +348,123 @@ export class ResilientConnectionManager {
   getStatus(): ConnectionStatus {
     return {
       state: this.state,
-      transport: this.currentTransport,
+      transport: this.socket?.io.engine?.transport?.name || "none",
       network: detectNetworkQuality(),
       queueSize: this.messageQueue.size,
       reconnectAttempts: this.reconnection.attempts,
       lastConnected: this.lastConnected,
       lastError: this.lastError,
+      socketId: this.socketId,
     };
   }
 
-  // ── Transport Selection ─────────────────────────────────────────────
+  // ── Socket.IO Connection ──────────────────────────────────────────────
 
-  private selectTransport(network: NetworkStatus): TransportType {
-    if (!this.config.bandwidthAdaptive) return "websocket";
-
-    switch (network.quality) {
-      case "high":
-        return "websocket";
-      case "medium":
-        // WebSocket is still fine on 3G, but fall back faster
-        return "websocket";
-      case "low":
-        // On 2G/slow connections, SSE is more efficient (half-duplex, less overhead)
-        return "sse";
-      case "offline":
-        return "polling"; // Will queue; polling tries periodically
-      default:
-        return "websocket";
-    }
-  }
-
-  private async connectTransport(transport: TransportType): Promise<void> {
+  private async connectSocketIO(): Promise<void> {
     this.setState("connecting");
 
-    switch (transport) {
-      case "websocket":
-        this.connectWebSocket();
-        break;
-      case "sse":
-        this.connectSSE();
-        break;
-      case "polling":
-        this.startPolling();
-        break;
-    }
-  }
-
-  // ── WebSocket Transport ─────────────────────────────────────────────
-
-  private connectWebSocket(): void {
     try {
-      const url = `${this.config.wsUrl}?clientId=${this.clientId}`;
-      this.ws = new WebSocket(url);
+      // Create Socket.IO connection with proper options
+      this.socket = io(this.config.serverUrl, {
+        path: this.config.socketPath,
+        transports: ["websocket", "polling"],
+        reconnection: false, // We handle reconnection manually
+        auth: { clientId: this.clientId },
+        timeout: 20000,
+        forceNew: true,
+      });
 
-      this.ws.onopen = () => {
-        this.currentTransport = "websocket";
-        this.setState("connected");
-        this.reconnection.reset();
-        this.lastConnected = Date.now();
-        this.startHeartbeat();
-        this.drainQueue();
-      };
-
-      this.ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === "pong") {
-            this.handleHeartbeatResponse();
-            return;
-          }
-          this.dispatchMessage(data.channel || data.type || "default", data);
-        } catch (err) {
-          console.warn('[Resilient] WS JSON parse failed, dispatching raw:', String(err));
-          this.dispatchMessage("raw", event.data);
-        }
-      };
-
-      this.ws.onclose = (event) => {
-        this.currentTransport = "none";
-        if (event.code !== 1000) {
-          // Abnormal close — reconnect
-          this.handleDisconnect("WebSocket closed abnormally");
-        } else {
-          this.setState("disconnected");
-        }
-      };
-
-      this.ws.onerror = () => {
-        this.lastError = "WebSocket connection failed";
-        // Try SSE fallback
-        this.ws?.close();
-        this.tryFallbackTransport("websocket");
-      };
-    } catch (e) {
-      this.lastError = `WebSocket error: ${e}`;
-      this.tryFallbackTransport("websocket");
-    }
-  }
-
-  // ── SSE Transport (Server-Sent Events) ──────────────────────────────
-
-  private connectSSE(): void {
-    try {
-      const url = `${this.config.sseUrl}?clientId=${this.clientId}`;
-      this.sse = new EventSource(url);
-
-      this.sse.onopen = () => {
-        this.currentTransport = "sse";
-        this.setState("connected");
-        this.reconnection.reset();
-        this.lastConnected = Date.now();
-        this.startHeartbeat();
-        this.drainQueue();
-      };
-
-      this.sse.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          this.dispatchMessage(data.channel || data.type || "default", data);
-        } catch (err) {
-          console.warn('[Resilient] SSE JSON parse failed, dispatching raw:', String(err));
-          this.dispatchMessage("raw", event.data);
-        }
-      };
-
-      this.sse.onerror = () => {
-        this.sse?.close();
-        this.currentTransport = "none";
-        this.tryFallbackTransport("sse");
-      };
+      this.setupSocketListeners();
     } catch (err) {
-      console.warn('[Resilient] SSE connection failed, falling back:', String(err));
-      this.tryFallbackTransport("sse");
+      this.lastError = `Socket.IO connection failed: ${err}`;
+      this.scheduleReconnect();
     }
   }
 
-  // ── Polling Transport ───────────────────────────────────────────────
+  private setupSocketListeners(): void {
+    if (!this.socket) return;
 
-  private startPolling(): void {
-    this.currentTransport = "polling";
-    this.setState("connected");
-    this.lastConnected = Date.now();
-
-    const poll = async () => {
-      try {
-        const resp = await fetch(
-          `${this.config.pollingUrl}?clientId=${this.clientId}&since=${this.lastConnected}`,
-          { signal: AbortSignal.timeout(10000) },
-        );
-        if (resp.ok) {
-          const data = await resp.json();
-          if (Array.isArray(data.messages)) {
-            for (const msg of data.messages) {
-              this.dispatchMessage(msg.channel || msg.type || "default", msg);
-            }
-          }
-          // Try upgrading to better transport
-          const network = detectNetworkQuality();
-          if (network.quality !== "low" && network.quality !== "offline") {
-            this.stopPolling();
-            this.connectTransport(this.selectTransport(network));
-          }
+    this.socket.on("connect", () => {
+      this.socketId = this.socket?.id || null;
+      this.setState("connected");
+      this.reconnection.reset();
+      this.lastConnected = Date.now();
+      this.startHeartbeat();
+      this.drainQueue();
+      
+      // Authenticate with user ID
+      if (this.clientId) {
+        // Extract user ID from clientId (format: "user-{userId}-{timestamp}")
+        const match = this.clientId.match(/^user-(\d+)-/);
+        if (match) {
+          this.socket?.emit("authenticate", parseInt(match[1], 10));
         }
-      } catch (err) {
-        console.warn('[Resilient] Poll failed, will retry:', String(err));
       }
-    };
+    });
 
-    poll();
-    this.pollingTimer = setInterval(poll, this.config.pollingInterval);
-    this.drainQueue();
+    this.socket.on("disconnect", (reason) => {
+      this.socketId = null;
+      this.stopHeartbeat();
+      if (reason === "io server disconnect") {
+        // Server initiated disconnect, don't reconnect automatically
+        this.setState("disconnected");
+      } else {
+        // Network issue, schedule reconnect
+        this.handleDisconnect(`Socket.IO disconnected: ${reason}`);
+      }
+    });
+
+    this.socket.on("connect_error", (err) => {
+      this.lastError = `Socket.IO connection error: ${err.message}`;
+      this.scheduleReconnect();
+    });
+
+    this.socket.on("message", (data: unknown) => {
+      try {
+        const parsed = typeof data === "string" ? JSON.parse(data) : data;
+        if (parsed.type === "pong") {
+          this.handleHeartbeatResponse();
+          return;
+        }
+        this.dispatchMessage(parsed.channel || parsed.type || "default", parsed);
+      } catch (err) {
+        console.warn("[Resilient] Socket.IO message parse failed:", String(err));
+        this.dispatchMessage("raw", data);
+      }
+    });
+
+    // Handle real-time events from server
+    this.socket.on("realtime_event", (event: unknown) => {
+      this.dispatchMessage("realtime_event", event);
+    });
+
+    this.socket.on("sync_event", (event: unknown) => {
+      this.dispatchMessage("sync_event", event);
+    });
+
+    this.socket.on("sync_conflict", (conflict: unknown) => {
+      this.dispatchMessage("sync_conflict", conflict);
+    });
   }
 
-  private stopPolling(): void {
-    if (this.pollingTimer) {
-      clearInterval(this.pollingTimer);
-      this.pollingTimer = null;
+  private disconnectSocket(): void {
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket = null;
     }
   }
 
-  // ── Heartbeat / Keepalive ──────────────────────────────────────────
+  // ── Heartbeat ──────────────────────────────────────────────────────────
 
   private startHeartbeat(): void {
     this.stopHeartbeat();
     this.heartbeatTimer = setInterval(() => {
-      if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: "ping", timestamp: Date.now() }));
-        // Set timeout for response
+      if (this.socket?.connected) {
+        this.socket.emit("ping");
+        // Set timeout for pong response
         this.heartbeatTimeoutTimer = setTimeout(() => {
-          console.warn("[Resilient] Heartbeat timeout — connection may be dead");
-          this.ws?.close();
+          this.lastError = "Heartbeat timeout";
+          this.socket?.disconnect();
           this.handleDisconnect("Heartbeat timeout");
         }, this.config.heartbeatTimeout);
       }
@@ -587,42 +489,24 @@ export class ResilientConnectionManager {
     }
   }
 
-  // ── Reconnection & Fallback ────────────────────────────────────────
+  // ── Reconnection ──────────────────────────────────────────────────────
 
   private handleDisconnect(reason: string): void {
     this.lastError = reason;
-    this.stopHeartbeat();
     this.setState("reconnecting");
+    this.scheduleReconnect();
+  }
 
+  private scheduleReconnect(): void {
+    this.clearReconnectTimer();
     const delay = this.reconnection.nextDelay();
     if (delay < 0) {
       this.setState("disconnected");
       return;
     }
-
-    console.warn(`[Resilient] Reconnecting in ${delay}ms (attempt ${this.reconnection.attempts})`);
     this.reconnectTimer = setTimeout(() => {
-      const network = detectNetworkQuality();
-      if (!network.online) {
-        this.setState("offline");
-        return;
-      }
-      const transport = this.selectTransport(network);
-      this.connectTransport(transport);
+      this.connectSocketIO();
     }, delay);
-  }
-
-  private tryFallbackTransport(failed: TransportType): void {
-    const fallbackOrder: TransportType[] = ["websocket", "sse", "polling"];
-    const failedIdx = fallbackOrder.indexOf(failed);
-    const next = fallbackOrder[failedIdx + 1];
-
-    if (next) {
-      console.warn(`[Resilient] Falling back from ${failed} to ${next}`);
-      this.connectTransport(next);
-    } else {
-      this.handleDisconnect(`All transports failed (last: ${failed})`);
-    }
   }
 
   private clearReconnectTimer(): void {
@@ -632,217 +516,131 @@ export class ResilientConnectionManager {
     }
   }
 
-  // ── Queue Drain ────────────────────────────────────────────────────
+  // ── Queue Management ──────────────────────────────────────────────────
 
   private async drainQueue(): Promise<void> {
-    if (this.state !== "connected") return;
-
-    let drained = 0;
-    const maxBatch = 50;
-
-    while (drained < maxBatch) {
+    while (this.messageQueue.size > 0) {
       const msg = await this.messageQueue.dequeue();
       if (!msg) break;
-
-      try {
-        await this.send(msg.channel, msg.payload, msg.priority);
-        await this.messageQueue.remove(msg.id);
-        drained++;
-      } catch (err) {
-        console.warn('[Resilient] Queue drain send failed:', String(err));
-        await this.messageQueue.incrementRetry(msg.id);
-        if (msg.retries >= 5) {
+      
+      if (this.socket?.connected) {
+        try {
+          this.socket.emit("message", JSON.stringify({
+            channel: msg.channel,
+            payload: msg.payload,
+            clientId: this.clientId,
+            timestamp: Date.now(),
+          }));
           await this.messageQueue.remove(msg.id);
+        } catch (err) {
+          await this.messageQueue.incrementRetry(msg.id);
+          if (msg.retries >= 5) {
+            await this.messageQueue.remove(msg.id); // Give up after 5 retries
+          }
+          break; // Stop draining on send failure
         }
-        break;
+      } else {
+        break; // Not connected, stop draining
       }
     }
-
-    if (drained > 0) {
-      console.warn(`[Resilient] Drained ${drained} queued messages`);
-      this.notifyStatusChange();
-    }
+    this.notifyStatusChange();
   }
 
-  // ── Network Monitor ────────────────────────────────────────────────
+  // ── Network Monitoring ─────────────────────────────────────────────────
 
   private startNetworkMonitor(): void {
+    if (typeof window === "undefined") return;
+    
     const handleOnline = () => {
-      console.warn("[Resilient] Network came online");
-      if (this.state === "offline") {
-        const network = detectNetworkQuality();
-        const transport = this.selectTransport(network);
-        this.connectTransport(transport);
+      if (this.state === "offline" || this.state === "disconnected") {
+        this.connect(this.clientId);
       }
     };
-
     const handleOffline = () => {
-      console.warn("[Resilient] Network went offline");
-      this.disconnectAll();
       this.setState("offline");
-    };
-
-    const handleConnectionChange = () => {
-      const network = detectNetworkQuality();
-      if (this.config.bandwidthAdaptive && this.state === "connected") {
-        const ideal = this.selectTransport(network);
-        if (ideal !== this.currentTransport) {
-          console.warn(`[Resilient] Bandwidth changed: ${this.currentTransport} → ${ideal}`);
-          this.disconnectAll();
-          this.connectTransport(ideal);
-        }
-      }
-      this.notifyStatusChange();
     };
 
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
-
-    const nav = navigator as Navigator & { connection?: EventTarget };
-    nav.connection?.addEventListener?.("change", handleConnectionChange);
-
+    
     this.networkMonitorCleanup = () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
-      nav.connection?.removeEventListener?.("change", handleConnectionChange);
     };
   }
 
   private stopNetworkMonitor(): void {
-    this.networkMonitorCleanup?.();
-    this.networkMonitorCleanup = null;
+    if (this.networkMonitorCleanup) {
+      this.networkMonitorCleanup();
+      this.networkMonitorCleanup = null;
+    }
   }
 
-  // ── Internal ───────────────────────────────────────────────────────
-
-  private disconnectAll(): void {
-    this.stopHeartbeat();
-    this.stopPolling();
-    if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.onerror = null;
-      this.ws.close();
-      this.ws = null;
-    }
-    if (this.sse) {
-      this.sse.close();
-      this.sse = null;
-    }
-    this.currentTransport = "none";
-  }
+  // ── State Management ──────────────────────────────────────────────────
 
   private setState(state: ConnectionState): void {
-    if (this.state === state) return;
-    this.state = state;
-    this.notifyStatusChange();
+    if (this.state !== state) {
+      this.state = state;
+      this.notifyStatusChange();
+    }
   }
 
   private notifyStatusChange(): void {
     const status = this.getStatus();
-    for (const handler of this.statusHandlers) {
-      try {
-        handler(status);
-      } catch (err) {
-        console.warn('[Resilient] Status handler error:', String(err));
-      }
-    }
+    this.statusHandlers.forEach(handler => handler(status));
   }
 
   private dispatchMessage(channel: string, data: unknown): void {
-    const handlers = this.messageHandlers.get(channel);
-    if (handlers) {
-      for (const handler of handlers) {
-        try {
-          handler(data);
-        } catch (e) {
-          console.error(`[Resilient] Handler error on channel "${channel}":`, e);
-        }
-      }
-    }
-    // Also dispatch to wildcard handlers
-    const wildcardHandlers = this.messageHandlers.get("*");
-    if (wildcardHandlers) {
-      for (const handler of wildcardHandlers) {
-        try {
-          handler(data);
-        } catch (err) {
-          console.warn('[Resilient] Wildcard handler error:', String(err));
-        }
-      }
-    }
+    this.messageHandlers.get(channel)?.forEach(handler => handler(data));
   }
 }
 
 // ── React Hook ──────────────────────────────────────────────────────────
 
-import { useState, useEffect, useRef, useCallback } from "react";
-
-const globalManager = new ResilientConnectionManager();
+import { useEffect, useRef, useState, useCallback } from "react";
 
 export function useResilientConnection(clientId?: string) {
-  const [status, setStatus] = useState<ConnectionStatus>(globalManager.getStatus());
-  const connectedRef = useRef(false);
+  const managerRef = useRef<ResilientConnectionManager | null>(null);
+  const [status, setStatus] = useState<ConnectionStatus>({
+    state: "disconnected",
+    transport: "none",
+    network: { quality: "offline", effectiveType: "offline", downlinkMbps: 0, rtt: 0, online: false, saveData: false },
+    queueSize: 0,
+    reconnectAttempts: 0,
+    lastConnected: null,
+    lastError: null,
+    socketId: null,
+  });
 
   useEffect(() => {
-    const unsub = globalManager.onStatusChange(setStatus);
+    managerRef.current = new ResilientConnectionManager();
+    const manager = managerRef.current;
 
-    if (clientId && !connectedRef.current) {
-      connectedRef.current = true;
-      globalManager.connect(clientId);
+    const unsubscribe = manager.onStatusChange((newStatus) => {
+      setStatus(newStatus);
+    });
+
+    if (clientId) {
+      manager.connect(clientId);
     }
 
-    return unsub;
+    return () => {
+      unsubscribe();
+      manager.disconnect();
+    };
   }, [clientId]);
 
-  const send = useCallback(
-    (channel: string, payload: unknown, priority?: "high" | "normal" | "low") => {
-      return globalManager.send(channel, payload, priority);
-    },
-    [],
-  );
-
-  const subscribe = useCallback((channel: string, handler: MessageHandler) => {
-    return globalManager.onMessage(channel, handler);
+  const send = useCallback(async (channel: string, payload: unknown, priority?: "high" | "normal" | "low") => {
+    await managerRef.current?.send(channel, payload, priority);
   }, []);
 
-  return { status, send, subscribe, manager: globalManager };
+  const onMessage = useCallback((channel: string, handler: MessageHandler) => {
+    return managerRef.current?.onMessage(channel, handler) || (() => {});
+  }, []);
+
+  const subscribe = useCallback((channel: string, handler: MessageHandler) => {
+    return managerRef.current?.onMessage(channel, handler) || (() => {});
+  }, []);
+
+  return { status, send, onMessage, subscribe };
 }
-
-// ── Bandwidth-Adaptive Fetch ────────────────────────────────────────────
-
-export async function resilientFetch(
-  url: string,
-  options: RequestInit = {},
-  config: { timeout?: number; retries?: number; priority?: "high" | "normal" } = {},
-): Promise<Response> {
-  const network = detectNetworkQuality();
-  const timeout = config.timeout || (network.quality === "low" ? 30000 : network.quality === "medium" ? 15000 : 10000);
-  const retries = config.retries || (network.quality === "low" ? 3 : 1);
-
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeout);
-
-      const response = await fetch(url, {
-        ...options,
-        signal: controller.signal,
-      });
-
-      clearTimeout(timer);
-      return response;
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error(String(e));
-      if (attempt < retries) {
-        const backoff = Math.min(1000 * Math.pow(2, attempt), 10000);
-        await new Promise((r) => setTimeout(r, backoff));
-      }
-    }
-  }
-
-  throw lastError || new Error("Request failed after retries");
-}
-
-export { detectNetworkQuality, OfflineMessageQueue };

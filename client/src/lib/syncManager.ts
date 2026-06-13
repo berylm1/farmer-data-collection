@@ -271,9 +271,13 @@ export class SyncManager {
       }
     }
 
+    private syncMutex: Promise<TableSyncResult[]> | null = null;
+
     async sync(): Promise<TableSyncResult[]> {
-      if (this.status.isSyncing) {
-        return []; // Already syncing
+      // If sync is already in progress, return the existing promise
+      if (this.syncMutex) {
+        console.warn('[SyncManager] Sync already in progress, returning existing promise');
+        return this.syncMutex;
       }
 
       // Check network status before syncing
@@ -285,7 +289,15 @@ export class SyncManager {
 
       this.updateStatus({ isSyncing: true, error: null });
 
-    const results: TableSyncResult[] = [];
+      this.syncMutex = this.doSync();
+      try {
+        return await this.syncMutex;
+      } finally {
+        this.syncMutex = null;
+      }
+    }
+
+    private async doSync(): Promise<TableSyncResult[]> {
     const tables: Array<{
       name: "farmers" | "farms" | "crops" | "livestock" | "farmInputs" | "harvests" | "expenses";
       schema: any;

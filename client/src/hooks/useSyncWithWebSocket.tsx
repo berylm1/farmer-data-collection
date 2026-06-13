@@ -6,14 +6,16 @@
  * - Incremental sync triggered by WebSocket events
  * - Conflict resolution UI integration
  * - Sync metrics and observability
+ * 
+ * NOW USES: useResilientConnection (Socket.IO-based) instead of raw socket.io-client
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { io, Socket } from 'socket.io-client';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 import { getSyncManager, SyncStatus, TableSyncResult } from '@/lib/syncManager';
 import { queryClient } from '@/lib/trpc';
+import { useResilientConnection } from '@/services/resilient-connectivity';
 
 // ============================================================================
 // Types
@@ -70,11 +72,14 @@ const PYTHON_ANALYTICS_URL = import.meta.env.VITE_PYTHON_ANALYTICS_URL || '';
 
 export function useSyncWithWebSocket() {
   const { user } = useAuth();
-  const socketRef = useRef<Socket | null>(null);
   const syncManager = useRef(getSyncManager());
   const lastSyncTrigger = useRef<number>(0);
-  const focusTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  
+  const focusTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Use the new ResilientConnectionManager (Socket.IO-based)
+  const clientId = user ? `user-${user.id}-${Date.now()}` : undefined;
+  const { status: resilientStatus, send: resilientSend, subscribe: resilientSubscribe } = useResilientConnection(clientId);
+
   const [status, setStatus] = useState<EnhancedSyncStatus>({
     isSyncing: false,
     lastSyncTime: null,
@@ -145,77 +150,40 @@ export function useSyncWithWebSocket() {
   }, [queryClient]);
 
   // ============================================================================
-  // WebSocket Connection
+  // WebSocket Connection via ResilientConnectionManager
   // ============================================================================
 
+  // Monitor WebSocket connection status from ResilientConnectionManager
   useEffect(() => {
-    if (!user) {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-        socketRef.current = null;
-        setStatus(prev => ({ ...prev, websocketConnected: false }));
-      }
-      return;
-    }
+    setStatus(prev => ({
+      ...prev,
+      websocketConnected: resilientStatus.state === 'connected',
+    }));
+  }, [resilientStatus.state]);
 
-    // Connect to Socket.IO server
-    const socket = io({
-      path: '/socket.io/',
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionAttempts: Infinity, // Keep trying to reconnect
-      reconnectionDelayMax: 30000,
-    });
-
-    socketRef.current = socket;
-
-    // Connection handlers
-    socket.on('connect', () => {
-      console.warn('[WebSocket] Connected:', socket.id);
-      setStatus(prev => ({ ...prev, websocketConnected: true }));
-      
-      // Authenticate
-      socket.emit('authenticate', user.id);
-      
-      // Trigger sync after reconnection
-      setTimeout(() => {
-        triggerSync('websocket_reconnect');
-      }, SYNC_ON_RECONNECT_DELAY);
-    });
-
-    socket.on('disconnect', () => {
-      console.warn('[WebSocket] Disconnected');
-      setStatus(prev => ({ ...prev, websocketConnected: false }));
-    });
-
-    socket.on('connect_error', (error) => {
-      console.error('[WebSocket] Connection error:', error);
-      setStatus(prev => ({ ...prev, websocketConnected: false }));
-    });
-
-    // Handle real-time sync events
-    socket.on('realtime_event', (event: SyncEvent) => {
-      console.warn('[WebSocket] Received sync event:', event);
+  // Subscribe to real-time sync events from ResilientConnectionManager
+  useEffect(() => {
+    const unsubRealtime = resilientSubscribe('realtime_event', (data) => {
+      const event = data as SyncEvent;
       handleSyncEvent(event);
     });
 
-    // Handle sync-specific events from Go service
-    socket.on('sync_event', (event: SyncEvent) => {
-      console.warn('[WebSocket] Received sync_event:', event);
+    const unsubSync = resilientSubscribe('sync_event', (data) => {
+      const event = data as SyncEvent;
       handleSyncEvent(event);
     });
 
-    // Handle conflict notifications
-    socket.on('sync_conflict', (conflict: SyncConflict) => {
-      console.warn('[WebSocket] Received conflict:', conflict);
+    const unsubConflict = resilientSubscribe('sync_conflict', (data) => {
+      const conflict = data as SyncConflict;
       handleConflict(conflict);
     });
 
     return () => {
-      socket.disconnect();
+      unsubRealtime();
+      unsubSync();
+      unsubConflict();
     };
-  }, [user, triggerSync]);
+  }, [resilientSubscribe]);
 
   // ============================================================================
   // Handle Sync Events
@@ -268,7 +236,6 @@ export function useSyncWithWebSocket() {
       action: {
         label: 'Review',
         onClick: () => {
-          // Navigate to conflict resolution page
           window.location.href = `/sync/conflicts/${conflict.id}`;
         },
       },
@@ -278,7 +245,7 @@ export function useSyncWithWebSocket() {
 
   const showEventNotification = useCallback((event: SyncEvent) => {
     const entityName = event.entityType.replace(/s$/, ''); // Remove trailing 's'
-    
+
     switch (event.type) {
       case 'record_created':
         toast.success(`New ${entityName} added`, {
@@ -308,12 +275,10 @@ export function useSyncWithWebSocket() {
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible' && user) {
-        // Clear any existing timeout
         if (focusTimeoutRef.current) {
           clearTimeout(focusTimeoutRef.current);
         }
-        
-        // Delay sync slightly to avoid rapid triggers
+
         focusTimeoutRef.current = setTimeout(() => {
           triggerSync('app_focus');
         }, SYNC_ON_FOCUS_DELAY);
@@ -466,7 +431,9 @@ export function useSyncWithWebSocket() {
     sync: manualSync,
     resolveConflict,
     isOnline: navigator.onLine,
-    socket: socketRef.current,
+    // Expose resilient connection status for debugging
+    resilientStatus,
+    sendQueued: resilientSend,
   };
 }
 
@@ -501,49 +468,4 @@ export function useSync() {
     throw new Error('useSync must be used within a SyncProvider');
   }
   return context;
-}
-
-// ============================================================================
-// Sync Status Display Component
-// ============================================================================
-
-export function SyncStatusDisplay() {
-  const { status, sync, isOnline } = useSync();
-
-  return (
-    <div className="flex items-center gap-2 text-sm">
-      {/* Online/Offline indicator */}
-      <div className={`w-2 h-2 rounded-full ${isOnline ? 'bg-green-500' : 'bg-red-500'}`} />
-      
-      {/* WebSocket connection status */}
-      <div className={`w-2 h-2 rounded-full ${status.websocketConnected ? 'bg-blue-500' : 'bg-gray-400'}`} />
-      
-      {/* Sync status */}
-      {status.isSyncing ? (
-        <span className="text-muted-foreground">Syncing...</span>
-      ) : status.lastSyncTime ? (
-        <span className="text-muted-foreground">
-          Last sync: {new Date(status.lastSyncTime).toLocaleTimeString()}
-        </span>
-      ) : (
-        <span className="text-muted-foreground">Not synced</span>
-      )}
-      
-      {/* Pending conflicts badge */}
-      {status.pendingConflicts.length > 0 && (
-        <span className="bg-amber-500 text-white px-2 py-0.5 rounded-full text-xs">
-          {status.pendingConflicts.length} conflicts
-        </span>
-      )}
-      
-      {/* Manual sync button */}
-      <button
-        onClick={() => sync()}
-        disabled={status.isSyncing}
-        className="text-primary hover:underline disabled:opacity-50"
-      >
-        Sync Now
-      </button>
-    </div>
-  );
 }

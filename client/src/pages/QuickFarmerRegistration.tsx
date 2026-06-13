@@ -229,33 +229,44 @@ const submitFarmerData = async (data: FormData, isSync = false) => {
     );
   }
 
+  if (!user.id) {
+    throw new Error('User ID is missing');
+  }
+
   const clientId = isSync ? null : `offline-${Date.now()}`;
 
   return await db.transaction(async () => {
-    await db.run(
-      `
-      INSERT INTO farmers (
-        user_id, first_name, last_name, phone_number, email, address,
-        village, district, region, national_id, photo_url, client_id, sync_status
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        user.id,
-        data.firstName,
-        data.lastName,
-        data.phoneNumber || null,
-        data.email || null,
-        data.address || null,
-        data.village,
-        data.district,
-        data.region,
-        data.nationalId || null,
-        data.photoUrl || null,
-        clientId,
-        isSync ? "synced" : "pending",
-      ]
-    );
+    // Insert farmer
+    try {
+      await db.run(
+        `
+        INSERT INTO farmers (
+          user_id, first_name, last_name, phone_number, email, address,
+          village, district, region, national_id, photo_url, client_id, sync_status
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          user.id,
+          data.firstName,
+          data.lastName,
+          data.phoneNumber || null,
+          data.email || null,
+          data.address || null,
+          data.village,
+          data.district,
+          data.region,
+          data.nationalId || null,
+          data.photoUrl || null,
+          clientId,
+          isSync ? "synced" : "pending",
+        ]
+      );
+      console.log('[QuickFarmerRegistration] Farmer inserted successfully');
+    } catch (insertError) {
+      console.error('[QuickFarmerRegistration] Farmer insert failed:', insertError);
+      throw new Error(`Farmer insert failed: ${insertError instanceof Error ? insertError.message : String(insertError)}`);
+    }
 
     const farmer = await db.get<{ id: number }>(
       `SELECT id FROM farmers WHERE rowid = last_insert_rowid()`
@@ -265,26 +276,35 @@ const submitFarmerData = async (data: FormData, isSync = false) => {
       throw new Error("Farmer insert succeeded but no ID was returned");
     }
 
-    await db.run(
-      `
-      INSERT INTO farms (
-        user_id, farmer_id, farm_name, farm_size, farm_size_unit,
-        latitude, longitude, location, client_id, sync_status
-      )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `,
-      [
-        user.id,
-        farmer.id,
-        data.farmName,
-        data.farmSize ? Number(data.farmSize) : null,
-        data.latitude,
-        data.longitude,
-        `${data.latitude}, ${data.longitude}`,
-        clientId,
-        isSync ? "synced" : "pending",
-      ]
-    );
+    console.log('[QuickFarmerRegistration] Farmer ID:', farmer.id);
+
+    // Insert farm
+    try {
+      await db.run(
+        `
+        INSERT INTO farms (
+          user_id, farmer_id, farm_name, farm_size, farm_size_unit,
+          latitude, longitude, location, client_id, sync_status
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          user.id,
+          farmer.id,
+          data.farmName,
+          data.farmSize ? Number(data.farmSize) : null,
+          data.latitude,
+          data.longitude,
+          `${data.latitude}, ${data.longitude}`,
+          clientId,
+          isSync ? "synced" : "pending",
+        ]
+      );
+      console.log('[QuickFarmerRegistration] Farm inserted successfully');
+    } catch (farmInsertError) {
+      console.error('[QuickFarmerRegistration] Farm insert failed:', farmInsertError);
+      throw new Error(`Farm insert failed: ${farmInsertError instanceof Error ? farmInsertError.message : String(farmInsertError)}`);
+    }
 
     return farmer;
   });

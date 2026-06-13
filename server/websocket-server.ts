@@ -55,6 +55,10 @@ function isAllowedOrigin(origin?: string) {
       return true;
     }
   }
+  // Allow Tailscale domains in production (e.g., america.tail3a833f.ts.net)
+  if (isProduction && origin.includes('.ts.net')) {
+    return true;
+  }
   return allowedOrigins.includes(origin);
 }
 

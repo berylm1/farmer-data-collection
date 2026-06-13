@@ -53,6 +53,10 @@ function isAllowedOrigin(origin?: string | null) {
       return true;
     }
   }
+  // Allow Tailscale domains in production (e.g., america.tail3a833f.ts.net)
+  if (isProduction && origin.includes('.ts.net')) {
+    return true;
+  }
   return allowedOrigins.includes(origin);
 }
 
@@ -284,10 +288,10 @@ directives: {
     // WhatsApp API endpoints - apply messaging rate limit
     app.use("/api/whatsapp", rateLimiters.messaging, whatsappRouter);
   
-    // tRPC endpoint - apply standard API rate limit
+    // tRPC endpoint - apply standard API rate limit (higher limits for sync operations)
     app.use(
       "/api/trpc",
-      rateLimiters.api,
+      createExpressRateLimiter(60000, 1000), // 1000 requests/minute
       createExpressMiddleware({
         router: appRouter,
         createContext,
@@ -313,7 +317,7 @@ directives: {
   const wsServer = initWebSocketServer(server);
   logger.info('[Server] WebSocket server initialized');
   
-  server.listen(port, async () => {
+  server.listen(port, '0.0.0.0', async () => {
     logger.info(`Server running on http://localhost:${port}/`);
     logger.info(`tRPC endpoint available at http://localhost:${port}/api/trpc`);
     logger.info(`WebSocket server available at ws://localhost:${port}/socket.io/`);

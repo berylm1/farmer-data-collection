@@ -1,18 +1,11 @@
 /**
  * WebSocket Hook for Real-time Updates
- *
- * Uses the ResilientConnectionManager for automatic:
- * - Exponential backoff with jitter reconnection
- * - Transport fallback: WebSocket → SSE → polling
- * - Offline message queue (IndexedDB-backed, up to 5000 messages)
- * - Bandwidth detection and adaptive protocol switching
- * - Heartbeat/keepalive (15s interval, 10s timeout)
- *
- * Designed for low-bandwidth, intermittent connectivity in rural Africa.
+ * 
+ * NOW USES: useResilientConnection (Socket.IO-based) instead of duplicate socket.io-client
+ * This eliminates multiple Socket.IO connections.
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { io, Socket } from 'socket.io-client';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
 import {
@@ -44,16 +37,15 @@ export interface WebSocketStatus {
 }
 
 // ============================================================================
-// WebSocket Hook (with Resilient Connectivity)
+// WebSocket Hook (with Resilient Connectivity - NO DUPLICATE Socket.IO)
 // ============================================================================
 
 export function useWebSocket() {
   const { user } = useAuth();
-  const socketRef = useRef<Socket | null>(null);
   const [status, setStatus] = useState<WebSocketStatus>({ connected: false });
   const [lastEvent, setLastEvent] = useState<RealtimeEvent | null>(null);
 
-  // Resilient connection for offline queueing and bandwidth adaptation
+  // Use ResilientConnectionManager (Socket.IO) for everything - NO duplicate io() call
   const clientId = user ? `user-${user.id}-${Date.now()}` : undefined;
   const { status: resilientStatus, send: resilientSend, subscribe: resilientSubscribe } =
     useResilientConnection(clientId);
@@ -62,6 +54,7 @@ export function useWebSocket() {
   useEffect(() => {
     setStatus(prev => ({
       ...prev,
+      connected: resilientStatus.state === 'connected',
       transport: resilientStatus.transport,
       networkQuality: resilientStatus.network.quality,
       queueSize: resilientStatus.queueSize,
@@ -79,66 +72,15 @@ export function useWebSocket() {
     return unsub;
   }, [resilientSubscribe]);
 
+  // Subscribe to sync events
   useEffect(() => {
-    if (!user) {
-      if (socketRef.current) {
-        socketRef.current.disconnect();
-        socketRef.current = null;
-        setStatus(prev => ({ ...prev, connected: false }));
-      }
-      return;
-    }
-
-    const socket = io({
-      path: '/socket.io/',
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 30000,
-      reconnectionAttempts: Infinity,
-      randomizationFactor: 0.5,
-      timeout: 20000,
-    });
-
-    socketRef.current = socket;
-
-    socket.on('connect', () => {
-      setStatus(prev => ({ ...prev, connected: true, socketId: socket.id }));
-      socket.emit('authenticate', user.id);
-
-      // Only show toast on first connect, not reconnects
-      if (!socketRef.current?.recovered) {
-        toast.success('Real-time updates enabled', {
-          description: 'You will receive live notifications',
-          duration: 3000,
-        });
-      }
-    });
-
-    socket.on('disconnect', (reason) => {
-      setStatus(prev => ({ ...prev, connected: false }));
-      if (reason === 'io server disconnect') {
-        socket.connect();
-      }
-    });
-
-    socket.on('connect_error', () => {
-      setStatus(prev => ({ ...prev, connected: false }));
-    });
-
-    socket.on('connected', () => {
-      // Welcome message received
-    });
-
-    socket.on('realtime_event', (event: RealtimeEvent) => {
+    const unsub = resilientSubscribe('sync_event', (data) => {
+      const event = data as RealtimeEvent;
       setLastEvent(event);
       handleEventNotification(event);
     });
-
-    return () => {
-      socket.disconnect();
-    };
-  }, [user]);
+    return unsub;
+  }, [resilientSubscribe]);
 
   const handleEventNotification = (event: RealtimeEvent) => {
     switch (event.type) {
@@ -147,24 +89,20 @@ export function useWebSocket() {
           description: `${event.data.name} has been added to your records`,
         });
         break;
-      
       case 'harvest_recorded':
         toast.success('Harvest Recorded', {
           description: `${event.data.quantity} kg of ${event.data.cropType} harvested`,
         });
         break;
-      
       case 'expense_logged':
         toast.info('Expense Logged', {
           description: `${event.data.category}: $${event.data.amount}`,
         });
         break;
-      
       case 'notification': {
         const notif = event.data as { type?: string; title?: string; message?: string };
         const toastType = notif.type === 'alert' ? toast.warning : 
                          notif.type === 'error' ? toast.error : toast.info;
-        
         toastType(notif.title || 'Notification', {
           description: notif.message,
         });
@@ -174,16 +112,13 @@ export function useWebSocket() {
   };
 
   const subscribe = useCallback((channel: string) => {
-    if (socketRef.current) {
-      socketRef.current.emit('subscribe', channel);
-    }
-  }, []);
+    // Use resilientSend for subscribing
+    resilientSend('subscribe', { channel }, 'high');
+  }, [resilientSend]);
 
   const unsubscribe = useCallback((channel: string) => {
-    if (socketRef.current) {
-      socketRef.current.emit('unsubscribe', channel);
-    }
-  }, []);
+    resilientSend('unsubscribe', { channel }, 'high');
+  }, [resilientSend]);
 
   const sendQueued = useCallback(
     (channel: string, payload: unknown, priority?: 'high' | 'normal' | 'low') => {
@@ -197,7 +132,6 @@ export function useWebSocket() {
     lastEvent,
     subscribe,
     unsubscribe,
-    socket: socketRef.current,
     sendQueued,
     networkQuality: resilientStatus.network.quality,
     isOffline: resilientStatus.state === 'offline',

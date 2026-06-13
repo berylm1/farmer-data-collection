@@ -1,0 +1,272 @@
+{
+  "timestamp": "2026-06-12T19:23:40.719Z",
+  "repository": "farmer-data-collection",
+  "commit": "2caee8499b2385664ab407669b8eee05e8ad4a39",
+  "summary": {
+    "critical": 6,
+    "high": 6,
+    "medium": 8,
+    "low": 9,
+    "total": 29
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "bug",
+      "file": "client/src/services/resilient-connectivity.ts",
+      "title": "ResilientConnectionManager uses non-existent /ws endpoint",
+      "description": "Client defaults to /ws WebSocket endpoint but server only has Socket.IO at /socket.io/",
+      "recommendation": "Change wsUrl default to /socket.io/ and use socket.io-client instead of raw WebSocket",
+      "evidence": "Lines 290-292 in resilient-connectivity.ts"
+    },
+    {
+      "severity": "critical",
+      "category": "bug",
+      "file": "client/src/services/resilient-connectivity.ts",
+      "title": "ResilientConnectionManager uses non-existent /api/events SSE endpoint",
+      "description": "Server has no SSE endpoint at /api/events - will infinitely fallback",
+      "recommendation": "Remove SSE fallback or implement SSE endpoint on server",
+      "evidence": "Line 291 in resilient-connectivity.ts"
+    },
+    {
+      "severity": "critical",
+      "category": "bug",
+      "file": "client/src/services/resilient-connectivity.ts",
+      "title": "ResilientConnectionManager uses non-existent /api/poll polling endpoint",
+      "description": "Server has no polling endpoint at /api/poll - JSON parse errors on every poll",
+      "recommendation": "Remove polling fallback or implement polling endpoint",
+      "evidence": "Line 292 in resilient-connectivity.ts"
+    },
+    {
+      "severity": "critical",
+      "category": "architecture",
+      "file": "client/src/services/resilient-connectivity.ts",
+      "title": "ResilientConnectionManager does not use Socket.IO despite server using it",
+      "description": "Server uses Socket.IO at /socket.io/ but client uses raw WebSocket/SSE/polling",
+      "recommendation": "Rewrite ResilientConnectionManager to use socket.io-client with proper transports",
+      "evidence": "Server websocket-server.ts uses Socket.IO at path /socket.io/"
+    },
+    {
+      "severity": "critical",
+      "category": "bug",
+      "file": "client/src/db/sqliteWasmDb.ts",
+      "title": "Missing SQLite database corruption detection and validation",
+      "description": "Corrupted OPFS/IndexedDB data silently falls back to in-memory without cleanup",
+      "recommendation": "Add isValidSQLiteDatabase(), validateDatabaseIntegrity(), and clearAllPersistedData() methods",
+      "evidence": "Lines 205-220: try/catch only checks \"SELECT 1\" but does not validate schema integrity"
+    },
+    {
+      "severity": "high",
+      "category": "tech-debt",
+      "file": "client/src/db/sqliteWasmDb.ts",
+      "title": "No automatic cleanup of corrupted database files",
+      "description": "When corruption detected, corrupted data remains in OPFS/IndexedDB causing repeated failures",
+      "recommendation": "Add automatic cleanup of OPFS file and IndexedDB backup on corruption detection",
+      "evidence": "Line 215 sets existingData = null but does not delete persisted files"
+    },
+    {
+      "severity": "medium",
+      "category": "performance",
+      "file": "client/src/db/sqliteWasmDb.ts",
+      "title": "No SQLite integrity checks on database load",
+      "recommendation": "Add PRAGMA integrity_check or PRAGMA quick_check after loading database",
+      "evidence": "Only runs \"SELECT 1\" for validation"
+    },
+    {
+      "severity": "critical",
+      "category": "architecture",
+      "file": "client/src/lib/syncManager.ts",
+      "title": "Three uncoordinated sync mechanisms cause conflicts and duplicate work",
+      "description": "SyncManager (tRPC HTTP), useSyncWithWebSocket (broken ResilientConnectionManager), and useWebSocket (Socket.IO) all handle sync independently",
+      "recommendation": "Unify: 1) Delete useSyncWithWebSocket (deprecated), 2) Make SyncManager use Socket.IO for real-time + tRPC for batch, 3) Keep useWebSocket for UI notifications only",
+      "evidence": "All three files exist and have overlapping responsibilities"
+    },
+    {
+      "severity": "high",
+      "category": "architecture",
+      "file": "client/src/lib/syncManager.ts",
+      "title": "SyncManager lacks real-time event integration",
+      "description": "SyncManager only uses tRPC HTTP polling, missing real-time updates via Socket.IO",
+      "recommendation": "Add Socket.IO listener in SyncManager to trigger incremental sync on realtime_event",
+      "evidence": "SyncManager only has startAutoSync() with setInterval, no event-driven sync"
+    },
+    {
+      "severity": "high",
+      "category": "tech-debt",
+      "file": "client/src/hooks/useSyncWithWebSocket.tsx",
+      "title": "Duplicate conflict resolution logic in multiple sync systems",
+      "recommendation": "Centralize conflict resolution in SyncManager, remove from useSyncWithWebSocket",
+      "evidence": "Both SyncManager and useSyncWithWebSocket handle version-based conflicts"
+    },
+    {
+      "severity": "high",
+      "category": "performance",
+      "file": "drizzle/schema.ts",
+      "title": "No database indexes on frequently queried columns",
+      "description": "Tables lack indexes on userId, updatedAt, clientId - full table scans on sync",
+      "recommendation": "Add indexes: userId, updatedAt, clientId on all sync tables",
+      "evidence": "No .index() calls found in drizzle schema files"
+    },
+    {
+      "severity": "medium",
+      "category": "performance",
+      "file": "package.json",
+      "title": "No bundle size analysis script",
+      "recommendation": "Add \"analyze\": \"vite-bundle-analyzer\" or \"webpack-bundle-analyzer\" to scripts",
+      "evidence": "No bundle analysis in package.json scripts"
+    },
+    {
+      "severity": "medium",
+      "category": "business-gap",
+      "file": "client/src/lib/syncManager.ts",
+      "title": "No role-based sync permissions",
+      "description": "All users sync all tables regardless of role (farmer, agent, admin, cooperative)",
+      "recommendation": "Add role-based table access control in sync operations",
+      "evidence": "SyncManager syncs all 7 tables for every user"
+    },
+    {
+      "severity": "low",
+      "category": "orphan-feature",
+      "file": "scripts/seed-lenders.ts",
+      "title": "Script appears to be one-time seed/test only",
+      "description": "May be dead code after initial setup",
+      "recommendation": "Delete if no longer needed, or move to tests/fixtures",
+      "evidence": "Contains seed/test keywords, no exports"
+    },
+    {
+      "severity": "low",
+      "category": "orphan-feature",
+      "file": "scripts/seed-ml-models.ts",
+      "title": "Script appears to be one-time seed/test only",
+      "description": "May be dead code after initial setup",
+      "recommendation": "Delete if no longer needed, or move to tests/fixtures",
+      "evidence": "Contains seed/test keywords, no exports"
+    },
+    {
+      "severity": "low",
+      "category": "orphan-feature",
+      "file": "scripts/seed-sample-crops.ts",
+      "title": "Script appears to be one-time seed/test only",
+      "description": "May be dead code after initial setup",
+      "recommendation": "Delete if no longer needed, or move to tests/fixtures",
+      "evidence": "Contains seed/test keywords, no exports"
+    },
+    {
+      "severity": "low",
+      "category": "orphan-feature",
+      "file": "scripts/seed-sample-farms.ts",
+      "title": "Script appears to be one-time seed/test only",
+      "description": "May be dead code after initial setup",
+      "recommendation": "Delete if no longer needed, or move to tests/fixtures",
+      "evidence": "Contains seed/test keywords, no exports"
+    },
+    {
+      "severity": "low",
+      "category": "orphan-feature",
+      "file": "scripts/seed.mjs",
+      "title": "Script appears to be one-time seed/test only",
+      "description": "May be dead code after initial setup",
+      "recommendation": "Delete if no longer needed, or move to tests/fixtures",
+      "evidence": "Contains seed/test keywords, no exports"
+    },
+    {
+      "severity": "low",
+      "category": "orphan-feature",
+      "file": "scripts/setup-keycloak.mjs",
+      "title": "Script appears to be one-time seed/test only",
+      "description": "May be dead code after initial setup",
+      "recommendation": "Delete if no longer needed, or move to tests/fixtures",
+      "evidence": "Contains seed/test keywords, no exports"
+    },
+    {
+      "severity": "low",
+      "category": "orphan-feature",
+      "file": "scripts/test-enterprise-infrastructure.mjs",
+      "title": "Script appears to be one-time seed/test only",
+      "description": "May be dead code after initial setup",
+      "recommendation": "Delete if no longer needed, or move to tests/fixtures",
+      "evidence": "Contains seed/test keywords, no exports"
+    },
+    {
+      "severity": "low",
+      "category": "orphan-feature",
+      "file": "scripts/test-webhooks.ts",
+      "title": "Script appears to be one-time seed/test only",
+      "description": "May be dead code after initial setup",
+      "recommendation": "Delete if no longer needed, or move to tests/fixtures",
+      "evidence": "Contains seed/test keywords, no exports"
+    },
+    {
+      "severity": "low",
+      "category": "orphan-feature",
+      "file": "scripts/validate-africastalking-setup.ts",
+      "title": "Script appears to be one-time seed/test only",
+      "description": "May be dead code after initial setup",
+      "recommendation": "Delete if no longer needed, or move to tests/fixtures",
+      "evidence": "Contains seed/test keywords, no exports"
+    },
+    {
+      "severity": "high",
+      "category": "incomplete-flow",
+      "file": "tests/e2e/",
+      "title": "Insufficient E2E test coverage for critical user flows",
+      "description": "Only 0 E2E test files found",
+      "recommendation": "Add E2E tests for: farmer registration → farm creation → crop planting → harvest → expense logging → sync",
+      "evidence": "Critical paths spec exists but may not cover full flows"
+    },
+    {
+      "severity": "medium",
+      "category": "incomplete-flow",
+      "file": "server/auth-router.ts",
+      "title": "Missing token refresh flow",
+      "description": "No refresh token endpoint - users will be logged out when access token expires",
+      "recommendation": "Add /refresh endpoint with refresh token rotation",
+      "evidence": "Auth router lacks refresh token logic"
+    },
+    {
+      "severity": "high",
+      "category": "security",
+      "file": "server/index.ts",
+      "title": "CSP allows unsafe-inline in production",
+      "description": "Script/style sources include unsafe-inline even in production mode",
+      "recommendation": "Remove unsafe-inline from production CSP, use nonces or hashes",
+      "evidence": "Helmet config scriptSrc for production includes unsafe-inline"
+    },
+    {
+      "severity": "medium",
+      "category": "tech-debt",
+      "file": "tests/",
+      "title": "Low test coverage: only 0 test files",
+      "description": "Insufficient test coverage for critical paths",
+      "recommendation": "Aim for >80% coverage on sync, auth, payment, and data integrity logic",
+      "evidence": "Found 0 test files in tests/"
+    },
+    {
+      "severity": "medium",
+      "category": "incomplete-flow",
+      "file": "tests/",
+      "title": "Insufficient integration/E2E tests",
+      "description": "Only 0 integration/E2E test files",
+      "recommendation": "Add integration tests for sync flows, auth flows, payment flows",
+      "evidence": "Integration test files count"
+    },
+    {
+      "severity": "medium",
+      "category": "tech-debt",
+      "file": "OPERATIONAL_RUNBOOK.md",
+      "title": "Missing documentation file",
+      "description": "Expected documentation file not found: OPERATIONAL_RUNBOOK.md",
+      "recommendation": "Create missing documentation or update references",
+      "evidence": "File does not exist"
+    },
+    {
+      "severity": "medium",
+      "category": "tech-debt",
+      "file": "SECURITY_TESTING.md",
+      "title": "Missing documentation file",
+      "description": "Expected documentation file not found: SECURITY_TESTING.md",
+      "recommendation": "Create missing documentation or update references",
+      "evidence": "File does not exist"
+    }
+  ]
+}

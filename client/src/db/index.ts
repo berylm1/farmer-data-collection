@@ -69,3 +69,8 @@ export const client = new Proxy({} as LocalDb, {
     throw new Error('Client not initialized. Use getClient() instead.');
   },
 });
+
+// Health check function
+export function isDbReady(): boolean {
+  return dbInstance !== null && clientInstance !== null;
+}
