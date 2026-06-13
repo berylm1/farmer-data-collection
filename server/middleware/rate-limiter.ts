@@ -50,7 +50,7 @@ export const globalRateLimiter = createRateLimiter({ maxRequests: 100, windowMs:
 export const strictRateLimiter = createRateLimiter({ maxRequests: 10, windowMs: 60000, keyPrefix: "strict" });
 export const authRateLimiter = createRateLimiter({ maxRequests: 5, windowMs: 300000, keyPrefix: "auth" });
 
-function createExpressRateLimiter(windowMs: number, max: number) {
+export function createExpressRateLimiter(windowMs: number, max: number) {
   const expressStore = new Map<string, RateLimitEntry>();
   return (req: any, res: any, next: any) => {
     const ip = req.headers["x-forwarded-for"] || req.ip || "unknown";
