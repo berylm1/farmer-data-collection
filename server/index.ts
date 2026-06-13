@@ -24,7 +24,7 @@ import ussdRouter from "./routes/ussd.routes.js";
 import smsRouter from "./routes/sms.routes.js";
 import whatsappRouter from "./routes/whatsapp.routes.js";
 import { initializeLakehouse, shutdownLakehouse, getLakehouseStatus } from "./services/lakehouse/index.js";
-import { rateLimiters } from "./middleware/rate-limiter.js";
+import { rateLimiters, createExpressRateLimiter } from "./middleware/rate-limiter.js";
 import { tracingMiddleware } from './services/tracing.js';
 import { startPoolMonitor, getPoolMetrics, getPrometheusMetrics as getPoolPrometheusMetrics } from './services/db-pool-monitor.js';
 import { logger } from './logger.js';
