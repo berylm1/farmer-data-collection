@@ -5,7 +5,8 @@
 set -euo pipefail
 
 # Detect environment and set paths accordingly
-if [[ "$(hostname)" == *"minisforum"* ]] || [[ "$USER" == "newwaveclaw" ]] || [[ -d "/home/newwaveclaw" ]]; then
+CURRENT_USER="${USER:-$(whoami 2>/dev/null || echo unknown)}"
+if [[ "$(hostname)" == *"minisforum"* ]] || [[ "$CURRENT_USER" == "newwaveclaw" ]] || [[ -d "/home/newwaveclaw" ]]; then
     REPO_DIR="/home/newwaveclaw/farmer-data-collection"
     LOG_DIR="/home/newwaveclaw/logs"
     SYNC_MARKER="/home/newwaveclaw/.last-github-sync"
@@ -33,7 +34,7 @@ log() {
 }
 
 log "=== Hourly GitHub Sync Check ==="
-log "Environment: $(hostname) ($USER)"
+log "Environment: $(hostname) ($CURRENT_USER)"
 log "Repo: $REPO_DIR"
 
 cd "$REPO_DIR"
