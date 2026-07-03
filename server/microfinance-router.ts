@@ -10,6 +10,8 @@ import {
   creditScoreHistory,
 } from "../drizzle/financial-schema.js";
 import { CreditScoringService } from "./services/credit-scoring.js";
+import { randomUUID } from "crypto";
+import { Decimal } from "decimal.js";
 
 const creditScoringService = new CreditScoringService();
 
@@ -104,7 +106,7 @@ export const microfinanceRouter = router({
       }
 
       // Create loan application
-      const loanNumber = `LOAN-${Date.now()}-${Number(ctx.user.id)}`;
+      const loanNumber = `LOAN-${randomUUID().slice(0, 8)}`;
       
       const [loan] = await db
         .insert(loans)
@@ -113,7 +115,7 @@ export const microfinanceRouter = router({
           loanNumber,
           lenderId: input.lenderId,
           loanType: input.loanType,
-          principalAmount: Math.round(input.requestedAmount * 100), // Convert to cents
+          principalAmount: new Decimal(input.requestedAmount).mul(100).toDecimalPlaces(0).toNumber(),
           interestRate: 1500, // Default 15% (in basis points), will be updated on approval
           term: input.repaymentPeriodMonths,
           termMonths: input.repaymentPeriodMonths,

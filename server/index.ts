@@ -28,6 +28,7 @@ import { rateLimiters, createExpressRateLimiter } from "./middleware/rate-limite
 import { tracingMiddleware } from './services/tracing.js';
 import { startPoolMonitor, getPoolMetrics, getPrometheusMetrics as getPoolPrometheusMetrics } from './services/db-pool-monitor.js';
 import { logger } from './logger.js';
+import { randomUUID } from "crypto";
 
 // Load environment variables from .env.local (override system env vars)
 config({ path: ".env.local", override: true });
@@ -68,29 +69,47 @@ async function startServer() {
   app.use(helmet({
     hsts: false,
     contentSecurityPolicy: {
-directives: {
-  	defaultSrc: ["'self'"],
-  styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-  fontSrc: ["'self'", "https://fonts.gstatic.com"],
-  scriptSrc: isProduction
-    ? ["'self'", "'unsafe-inline'", "'wasm-unsafe-eval'"]
-    : ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
-  imgSrc: ["'self'", "data:", "https:", "blob:"],
-  workerSrc: ["'self'", "blob:"],
-  connectSrc: [
-    "'self'",
-    "https://maps.googleapis.com",
-    "https://api.open-meteo.com",
-    "https://*.manus.computer",
-    "wss://*.manus.computer",
-    ...allowedOrigins,
-    ...allowedOrigins.map((origin) => origin.replace(/^http/i, 'ws')),
-  ],
+      directives: {
+        defaultSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com"],
+        scriptSrc: isProduction
+          ? ["'self'"]  // Production: no inline scripts, no eval - use nonce via middleware
+          : ["'self'", "'unsafe-inline'", "'unsafe-eval'"],  // Dev: allow for hot reload
+        imgSrc: ["'self'", "data:", "https:", "blob:"],
+        workerSrc: ["'self'", "blob:"],
+        connectSrc: [
+          "'self'",
+          "https://maps.googleapis.com",
+          "https://api.open-meteo.com",
+          "https://*.manus.computer",
+          "wss://*.manus.computer",
+          ...allowedOrigins,
+          ...allowedOrigins.map((origin) => origin.replace(/^http/i, 'ws')),
+        ],
       },
     },
     crossOriginEmbedderPolicy: false,
     referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
   }));
+
+  // CSP nonce middleware for production (allows inline scripts with valid nonce)
+  if (isProduction) {
+    app.use((req, res, next) => {
+      const nonce = randomUUID().slice(0, 16);
+      res.locals.nonce = nonce;
+      // Update CSP header to include nonce for this request
+      const cspHeader = res.getHeader('Content-Security-Policy') as string;
+      if (cspHeader) {
+        const nonceCsp = cspHeader.replace(
+          "script-src 'self'",
+          `script-src 'self' 'nonce-${nonce}'`
+        );
+        res.setHeader('Content-Security-Policy', nonceCsp);
+      }
+      next();
+    });
+  }
 
   app.set('trust proxy', 1);
 

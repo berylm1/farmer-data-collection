@@ -16,9 +16,16 @@ import { logger } from '../logger.js';
 export { router, middleware } from "./trpc-init.js";
 export type { Context, AuthenticatedContext } from "./trpc-init.js";
 
-const JWT_SECRET = process.env.JWT_SECRET || (() => {
-  logger.error("[SECURITY] JWT_SECRET environment variable is not set. Using temporary development key.");
-  return "dev-only-secret-do-not-use-in-production";
+// Export JWT_SECRET for use in other modules (e.g., auth-router)
+export { JWT_SECRET };
+
+const JWT_SECRET = (() => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    logger.error("[SECURITY] JWT_SECRET environment variable is not set. Refusing to start without valid secret.");
+    throw new Error("JWT_SECRET must be set in environment variables");
+  }
+  return secret;
 })();
 
 const demoUsers = [

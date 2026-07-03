@@ -1,0 +1,30 @@
+name: OpenHands Resolver
+
+on:
+  issues:
+    types: [labeled]
+  issue_comment:
+    types: [created]
+  pull_request:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'issues' && contains(github.event.issue.labels.*.name, 'fix-me')) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'fix-me')) ||
+      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '@openhands'))
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run OpenHands Resolver
+        uses: OpenHands/OpenHands@main
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}

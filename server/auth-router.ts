@@ -2,15 +2,10 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { eq } from "drizzle-orm";
-import { router, publicProcedure } from "./_core/trpc-base.js";
+import { router, publicProcedure, JWT_SECRET } from "./_core/trpc-base.js";
 import { getDb } from "./db.js";
 import { users } from "../drizzle/schema.js";
 import { logger } from './logger.js';
-
-const JWT_SECRET = process.env.JWT_SECRET || (() => {
-  logger.error("[SECURITY] JWT_SECRET environment variable is not set. Using temporary development key.");
-  return "dev-only-secret-do-not-use-in-production";
-})();
 
 // Input validation schemas
 const registerSchema = z.object({
@@ -125,83 +120,62 @@ function isMissingDatabaseError(error: unknown) {
 }
 
 async function loginWithFallback(input: { email: string; password: string }) {
-  try {
-    const db = await getDb();
-    if (!db) {
-      const demoResult = getDemoLoginResult(input.email, input.password);
-      if (demoResult) return demoResult;
-      throw new Error("Database not available");
-    }
-
-    const [user] = await db
-      .select()
-      .from(users)
-      .where(eq(users.email, input.email))
-      .limit(1);
-
-    if (!user) {
-      const demoResult = getDemoLoginResult(input.email, input.password);
-      if (demoResult) return demoResult;
-      throw new Error("Invalid email or password");
-    }
-
-    if (!user.isActive) {
-      throw new Error("Account is inactive");
-    }
-
-    const isPasswordValid = await bcrypt.compare(input.password, user.password);
-    if (!isPasswordValid) {
-      const demoResult = getDemoLoginResult(input.email, input.password);
-      if (demoResult) return demoResult;
-      throw new Error("Invalid email or password");
-    }
-
-    return buildAuthResponse({
-      id: user.id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      role: user.role,
-    });
-  } catch (error) {
-    if (isMissingDatabaseError(error)) {
-      const demoResult = getDemoLoginResult(input.email, input.password);
-      if (demoResult) return demoResult;
-    }
-    throw error;
+  const db = await getDb();
+  if (!db) {
+    throw new Error("Database not available");
   }
+
+  const [user] = await db
+    .select()
+    .from(users)
+    .where(eq(users.email, input.email))
+    .limit(1);
+
+  if (!user) {
+    throw new Error("Invalid email or password");
+  }
+
+  if (!user.isActive) {
+    throw new Error("Account is inactive");
+  }
+
+  const isPasswordValid = await bcrypt.compare(input.password, user.password);
+  if (!isPasswordValid) {
+    throw new Error("Invalid email or password");
+  }
+
+  return buildAuthResponse({
+    id: user.id,
+    email: user.email,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    role: user.role,
+  });
 }
 
 async function getProfileWithFallback(payload: { userId: number; email: string; role: string }) {
-  try {
-    const db = await getDb();
-    if (!db) {
-      return getDemoProfileByTokenPayload(payload);
-    }
-
-    const [user] = await db
-      .select()
-      .from(users)
-      .where(eq(users.id, payload.userId))
-      .limit(1);
-
-    if (!user || !user.isActive) {
-      return getDemoProfileByTokenPayload(payload);
-    }
-
-    return {
-      id: user.id,
-      email: user.email,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      role: user.role,
-    };
-  } catch (error) {
-    if (isMissingDatabaseError(error)) {
-      return getDemoProfileByTokenPayload(payload);
-    }
-    throw error;
+  const db = await getDb();
+  if (!db) {
+    throw new Error("Database not available");
   }
+
+  const [user] = await db
+    .select()
+    .from(users)
+    .where(eq(users.id, payload.userId))
+    .limit(1);
+
+  if (!user || !user.isActive) {
+    throw new Error("User not found or inactive");
+  }
+
+  return {
+    id: user.id,
+    email: user.email,
+    firstName: user.firstName,
+    lastName: user.lastName,
+    role: user.role,
+  };
 }
 
 const authProfileSchema = z.object({
