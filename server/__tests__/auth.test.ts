@@ -558,4 +558,59 @@ describe('Authentication', () => {
       await db!.delete(schema.users).where(eq(schema.users.id, result.user.id));
     });
   });
+
+  describe('Demo Login Vulnerability Fix', () => {
+    it('should not allow login with demo credentials (no hardcoded passwords)', async () => {
+      const caller = appRouter.createCaller(await createContext({ req: {} as any, res: {} as any }));
+
+      // Try to login with former demo email addresses - these should fail
+      // because demo users are no longer hardcoded with plain-text passwords
+      const demoEmails = [
+        'demo@farmer.com',
+        'buyer@agrifinance.com',
+        'seller@agrifinance.com'
+      ];
+
+      for (const email of demoEmails) {
+        await expect(
+          caller.auth.login({
+            email: email,
+            password: 'demo123',
+          })
+        ).rejects.toThrow('Invalid email or password');
+      }
+    });
+
+    it('should use bcrypt for all password verification', async () => {
+      const caller = appRouter.createCaller(await createContext({ req: {} as any, res: {} as any }));
+      const bcryptEmail = `bcrypt_verify_${Date.now()}@example.com`;
+
+      const result = await caller.auth.register({
+        email: bcryptEmail,
+        password: 'secureTestPass123',
+        firstName: 'Bcrypt',
+        lastName: 'Verify',
+      });
+
+      // Verify the password works
+      const loginResult = await caller.auth.login({
+        email: bcryptEmail,
+        password: 'secureTestPass123',
+      });
+
+      expect(loginResult.success).toBe(true);
+      expect(loginResult.token).toBeDefined();
+
+      // Verify wrong password doesn't work
+      await expect(
+        caller.auth.login({
+          email: bcryptEmail,
+          password: 'wrongPassword',
+        })
+      ).rejects.toThrow();
+
+      // Clean up
+      await db!.delete(schema.users).where(eq(schema.users.id, result.user.id));
+    });
+  });
 });

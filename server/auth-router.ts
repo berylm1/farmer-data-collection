@@ -20,40 +20,6 @@ const loginSchema = z.object({
   password: z.string().min(1, "Password is required"),
 });
 
-const demoUsers = [
-  {
-    id: 900001,
-    email: "demo@farmer.com",
-    password: "demo123",
-    firstName: "Demo",
-    lastName: "Farmer",
-    role: "farmer",
-    isActive: true,
-  },
-  {
-    id: 900002,
-    email: "buyer@agrifinance.com",
-    password: "demo123",
-    firstName: "Demo",
-    lastName: "Buyer",
-    role: "buyer",
-    isActive: true,
-  },
-  {
-    id: 900003,
-    email: "seller@agrifinance.com",
-    password: "demo123",
-    firstName: "Demo",
-    lastName: "Seller",
-    role: "seller",
-    isActive: true,
-  },
-] as const;
-
-function findDemoUserByEmail(email: string) {
-  return demoUsers.find((user) => user.email.toLowerCase() === email.toLowerCase()) ?? null;
-}
-
 function buildAuthResponse(user: {
   id: number;
   email: string;
@@ -82,41 +48,6 @@ function buildAuthResponse(user: {
       role: user.role,
     },
   };
-}
-
-function getDemoLoginResult(email: string, password: string) {
-  const demoUser = findDemoUserByEmail(email);
-  if (!demoUser || demoUser.password !== password || !demoUser.isActive) {
-    return null;
-  }
-
-  return buildAuthResponse({
-    id: demoUser.id,
-    email: demoUser.email,
-    firstName: demoUser.firstName,
-    lastName: demoUser.lastName,
-    role: demoUser.role,
-  });
-}
-
-function getDemoProfileByTokenPayload(payload: { userId: number; email: string; role: string }) {
-  const demoUser = findDemoUserByEmail(payload.email);
-  if (!demoUser || demoUser.id !== payload.userId || demoUser.role !== payload.role || !demoUser.isActive) {
-    return null;
-  }
-
-  return {
-    id: demoUser.id,
-    email: demoUser.email,
-    firstName: demoUser.firstName,
-    lastName: demoUser.lastName,
-    role: demoUser.role,
-  };
-}
-
-function isMissingDatabaseError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error ?? "");
-  return /does not exist|failed query|database|ECONNREFUSED|connect/i.test(message);
 }
 
 async function loginWithFallback(input: { email: string; password: string }) {
