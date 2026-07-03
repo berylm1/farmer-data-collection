@@ -25,45 +25,6 @@ const loginSchema = z.object({
   password: z.string().min(1, "Password is required"),
 });
 
-const demoUsers = [
-  {
-    id: 900001,
-    email: "demo@farmer.com",
-    password: "demo123",
-    firstName: "Demo",
-    lastName: "Farmer",
-    role: "farmer",
-    isActive: true,
-  },
-  {
-    id: 900002,
-    email: "buyer@agrifinance.com",
-    password: "demo123",
-    firstName: "Demo",
-    lastName: "Buyer",
-    role: "buyer",
-    isActive: true,
-  },
-  {
-    id: 900003,
-    email: "seller@agrifinance.com",
-    password: "demo123",
-    firstName: "Demo",
-    lastName: "Seller",
-    role: "seller",
-    isActive: true,
-  },
-] as const;
-
-function findDemoUserByEmail(email: string) {
-  return demoUsers.find((user) => user.email.toLowerCase() === email.toLowerCase()) ?? null;
-}
-
-function isInfrastructureError(error: unknown) {
-  const message = error instanceof Error ? error.message : String(error ?? "");
-  return /failed query|database|connect|ECONNREFUSED|does not exist/i.test(message);
-}
-
 function buildAuthResponse(user: {
   id: number;
   email: string;
@@ -91,36 +52,6 @@ function buildAuthResponse(user: {
       lastName: user.lastName,
       role: user.role,
     },
-  };
-}
-
-function getDemoAuthResult(email: string, password: string) {
-  const demoUser = findDemoUserByEmail(email);
-  if (!demoUser || demoUser.password !== password || !demoUser.isActive) {
-    return null;
-  }
-
-  return buildAuthResponse({
-    id: demoUser.id,
-    email: demoUser.email,
-    firstName: demoUser.firstName,
-    lastName: demoUser.lastName,
-    role: demoUser.role,
-  });
-}
-
-function getDemoUserFromToken(decoded: { userId: number; email: string; role: string }) {
-  const demoUser = findDemoUserByEmail(decoded.email);
-  if (!demoUser || demoUser.id !== decoded.userId || demoUser.role !== decoded.role || !demoUser.isActive) {
-    return null;
-  }
-
-  return {
-    id: demoUser.id,
-    email: demoUser.email,
-    firstName: demoUser.firstName,
-    lastName: demoUser.lastName,
-    role: demoUser.role,
   };
 }
 
@@ -188,60 +119,46 @@ export const authRouter = router({
   login: publicProcedure
     .input(loginSchema)
     .mutation(async ({ input }) => {
-      try {
-        const db = await getDb();
-        if (!db) {
-          const demoResult = getDemoAuthResult(input.email, input.password);
-          if (demoResult) return demoResult;
-          throw new Error("Database connection not available");
-        }
-
-        const foundUsers = await db
-          .select({
-            id: users.id,
-            email: users.email,
-            password: users.password,
-            firstName: users.firstName,
-            lastName: users.lastName,
-            role: users.role,
-            isActive: users.isActive,
-          })
-          .from(users)
-          .where(eq(users.email, input.email));
-
-        if (foundUsers.length === 0) {
-          const demoResult = getDemoAuthResult(input.email, input.password);
-          if (demoResult) return demoResult;
-          throw new Error("Invalid email or password");
-        }
-
-        const user = foundUsers[0];
-
-        if (!user.isActive) {
-          throw new Error("Account is inactive");
-        }
-
-        const isPasswordValid = await bcrypt.compare(input.password, user.password);
-        if (!isPasswordValid) {
-          const demoResult = getDemoAuthResult(input.email, input.password);
-          if (demoResult) return demoResult;
-          throw new Error("Invalid email or password");
-        }
-
-        return buildAuthResponse({
-          id: user.id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-        });
-      } catch (error) {
-        if (isInfrastructureError(error)) {
-          const demoResult = getDemoAuthResult(input.email, input.password);
-          if (demoResult) return demoResult;
-        }
-        throw error;
+      const db = await getDb();
+      if (!db) {
+        throw new Error("Database connection not available");
       }
+
+      const foundUsers = await db
+        .select({
+          id: users.id,
+          email: users.email,
+          password: users.password,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          role: users.role,
+          isActive: users.isActive,
+        })
+        .from(users)
+        .where(eq(users.email, input.email));
+
+      if (foundUsers.length === 0) {
+        throw new Error("Invalid email or password");
+      }
+
+      const user = foundUsers[0];
+
+      if (!user.isActive) {
+        throw new Error("Account is inactive");
+      }
+
+      const isPasswordValid = await bcrypt.compare(input.password, user.password);
+      if (!isPasswordValid) {
+        throw new Error("Invalid email or password");
+      }
+
+      return buildAuthResponse({
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+      });
     }),
 
   // Get current user profile
@@ -253,42 +170,35 @@ export const authRouter = router({
 
     try {
       const decoded = jwt.verify(token, JWT_SECRET) as { userId: number; email: string; role: string };
-      try {
-        const db = await getDb();
-        if (!db) {
-          return getDemoUserFromToken(decoded);
-        }
-
-        const foundUsers = await db
-          .select({
-            id: users.id,
-            email: users.email,
-            firstName: users.firstName,
-            lastName: users.lastName,
-            role: users.role,
-            isActive: users.isActive,
-          })
-          .from(users)
-          .where(eq(users.id, decoded.userId));
-
-        if (foundUsers.length === 0 || !foundUsers[0].isActive) {
-          return getDemoUserFromToken(decoded);
-        }
-
-        const user = foundUsers[0];
-        return {
-          id: user.id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-        };
-      } catch (error) {
-        if (isInfrastructureError(error)) {
-          return getDemoUserFromToken(decoded);
-        }
-        throw error;
+      const db = await getDb();
+      if (!db) {
+        throw new Error("Database connection not available");
       }
+
+      const foundUsers = await db
+        .select({
+          id: users.id,
+          email: users.email,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          role: users.role,
+          isActive: users.isActive,
+        })
+        .from(users)
+        .where(eq(users.id, decoded.userId));
+
+      if (foundUsers.length === 0 || !foundUsers[0].isActive) {
+        throw new Error("User not found or inactive");
+      }
+
+      const user = foundUsers[0];
+      return {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+      };
     } catch (error) {
       logger.error("[Auth.me] Error:", error);
       return null;
